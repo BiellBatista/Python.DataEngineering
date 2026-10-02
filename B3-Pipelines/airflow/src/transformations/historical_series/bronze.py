@@ -7,7 +7,7 @@ from typing import Optional
 import duckdb
 
 from ingestion.historical_series.raw import list_raw_dirs
-from utils.helpers import validate_output_dir
+from utils.helpers import ensure_directory_available
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,7 +71,7 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
     """
 
     try:
-        output_dir_is_valid = validate_output_dir(OUTPUT_DIR)
+        output_dir_is_valid = ensure_directory_available(OUTPUT_DIR)
 
         if not output_dir_is_valid:
             logger.error(f"Diretório de saída inválido: {OUTPUT_DIR}")
