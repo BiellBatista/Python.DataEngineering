@@ -219,5 +219,13 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Apache Airflow
-airflow/
-!airflow/dags/
+# Airflow logs
+*/airflow/logs/
+# Airflow configuration file
+*/airflow/airflow.cfg
+# Airflow SQLite database
+*/airflow/airflow.db
+*/airflow/airflow.db-shm
+*/airflow/airflow.db-wal
+# Generated password files
+*/airflow/simple_auth_manager_passwords.json.generated
