@@ -1,7 +1,7 @@
 import os
 
 def get_raw_dir(year) -> str:
-    raw_dir = f"D:/b3_datalake/raw/cotahist/ano={year}/COTAHIST_A{year}.TXT"
+    raw_dir = f"/mnt/d/b3_datalake/raw/cotahist/ano={year}/COTAHIST_A{year}.TXT"
 
     return raw_dir
 

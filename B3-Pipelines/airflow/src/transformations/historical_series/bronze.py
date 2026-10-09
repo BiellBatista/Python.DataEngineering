@@ -2,36 +2,41 @@ import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Optional
 
-import duckdb
+SRC_DIR = Path(__file__).resolve().parents[2]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
+import duckdb
 from ingestion.historical_series.raw import list_raw_dirs
 from utils.helpers import ensure_directory_available
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("ingestao_b3_bronze")
 
-OUTPUT_DIR = "D:/b3_datalake/bronze/cotahist"
-COPY_QUERY = """
+OUTPUT_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
+# Utilizado r"""...""" para preservar as barras invertidas do RegEx (\d)
+COPY_QUERY = r"""
     COPY (
         SELECT
             content,
             now() AS _ingested_at,
             filename AS _source_file,
             $dag_run_id AS _dag_run_id,
-            -- 1ª Chave de Partição: Ano extraído do nome do arquivo (ex: 'COTAPHIST_A2024.TXT' -> 2024)
-            CAST(regexp_extract(filename, 'A({4})', 1) AS INTEGER) AS year,
-            -- 2ª Chave de Partição: Data e Hora de ingestão tratadas para compatibilidade de sistema de arquivos (sem ':')
+            -- TRY_CAST evita quebra se algum arquivo não tiver o ano de 4 dígitos no nome
+            TRY_CAST(regexp_extract(filename, 'COTAHIST_A(\d{4})', 1) AS INTEGER) AS year,
             strftime(now(), '%Y-%m-%d_%H-%M-%S') AS _ingested_date
         FROM read_csv(
             $input_dir,
             header=False,
-            delimiter='\n',
+            delim='\n',
+            quote='',
             columns={'content': 'VARCHAR'},
             filename=True,
             parallel=True
@@ -45,7 +50,14 @@ COPY_QUERY = """
     );
 """
 
-def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional[str] = None, threads: Optional[int] = None, max_workers: Optional[int] = None) -> None:
+def execute_bronze_load(
+    dag_run_id: str,
+    start_year: int,
+    end_year: int,
+    memory_limit: Optional[str] = None,
+    threads: Optional[int] = None,
+    max_workers: Optional[int] = None,
+) -> None:
     """
     Executa a carga Bronze de forma paralela.
 
@@ -71,9 +83,7 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
     """
 
     try:
-        output_dir_is_valid = ensure_directory_available(OUTPUT_DIR)
-
-        if not output_dir_is_valid:
+        if not ensure_directory_available(OUTPUT_DIR):
             logger.error(f"Diretório de saída inválido: {OUTPUT_DIR}")
             return
 
@@ -86,7 +96,6 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
             return
 
         total_threads = threads or (os.cpu_count() or 1)
-
         # Evita criar workers demais.
         #
         # Exemplo:
@@ -94,10 +103,9 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
         # raw_dirs = 10
         # -> no máximo 4 workers
         workers = min(max_workers or 4, len(raw_dirs), total_threads)
-
         # Divide o orçamento total de threads
         # entre os workers.
-        threads_per_worker = max(1, total_threads // workers,)
+        threads_per_worker = max(1, total_threads // workers)
 
         logger.info(f"RAW dirs encontrados: {len(raw_dirs)}")
         logger.info(f"Workers paralelos: {workers}")
@@ -105,7 +113,7 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
         logger.info(f"Threads totais máximas: {workers * threads_per_worker}")
         logger.info(f"Destino: {OUTPUT_DIR}")
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bronze-worker",) as executor:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bronze-worker") as executor:
             futures = {
                 executor.submit(
                     _load_raw_dir,
@@ -119,14 +127,10 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
             }
 
             completed = 0
-
             for future in as_completed(futures):
-                raw_dir = futures[future]
-
                 # Se algum worker falhar, a exceção é
                 # propagada para esta função.
                 future.result()
-
                 completed += 1
 
                 logger.info(f"Progresso: {completed}/{len(raw_dirs)} raw_dirs concluídos")
@@ -137,22 +141,25 @@ def execute_bronze_load(dag_run_id, start_year, end_year, memory_limit: Optional
         logger.exception("❌ Erro durante a carga da Camada Bronze.")
         raise
 
-def _load_raw_dir(raw_dir: str, dag_run_id, output_dir: str, memory_limit: Optional[str], duckdb_threads: int) -> None:
+def _load_raw_dir(
+    raw_dir: str,
+    dag_run_id: str,
+    output_dir: str,
+    memory_limit: Optional[str],
+    duckdb_threads: int,
+) -> None:
     """
     Executa a ingestão de um único raw_dir.
 
     Cada worker cria sua própria conexão DuckDB.
     """
+
     con = None
 
     try:
-        logger.info(
-            f"Iniciando processamento: {raw_dir}"
-            f"(DuckDB threads={duckdb_threads})"
-        )
+        logger.info(f"Iniciando processamento: {raw_dir} (DuckDB threads={duckdb_threads})")
 
         con = duckdb.connect()
-
         # Reduz consumo de memória durante leitura/escrita.
         con.execute("SET preserve_insertion_order = false;")
 
@@ -181,5 +188,28 @@ def _load_raw_dir(raw_dir: str, dag_run_id, output_dir: str, memory_limit: Optio
     finally:
         if con is not None:
             con.close()
+
+def list_bronze_dirs(start_year: int, end_year: int) -> list[str]:
+    """
+    Lista os diretórios da Camada Bronze no caminho especificado.
+
+    Parâmetros
+    ----------
+    start_year / end_year:
+        Intervalo utilizado para localizar os diretórios Bronze.
+
+    Retorna
+    -------
+    List[str]:
+        Lista de caminhos dos diretórios da Camada Bronze.
+    """
+    directories = []
+
+    for year in range(start_year, end_year + 1):
+        directory = os.path.join(OUTPUT_DIR, f"year={year}")
+        if os.path.exists(directory):
+            directories.append(directory)
+
+    return directories
 
 execute_bronze_load("teste-123", 2024, 2025, memory_limit="8GB", threads=8, max_workers=4)

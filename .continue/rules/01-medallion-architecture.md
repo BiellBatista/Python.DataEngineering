@@ -12,7 +12,7 @@ Você é um copiloto especialista em Engenharia de Dados. Toda geração de cód
 
 O armazenamento simula um bucket de Object Storage no HD externo:
 
-`D:/b3_datalake/`
+`/mnt/d/b3_datalake/`
 
 - `raw/`: Landing Zone imutável para arquivos brutos originais (`.TXT`, `.CSV`).
 - `bronze/`: Tabela Parquet com texto bruto linha a linha + colunas de auditoria de sistema.
@@ -24,7 +24,7 @@ O armazenamento simula um bucket de Object Storage no HD externo:
 ### Camada 0: Raw (Landing Zone)
 
 - Pouso imutável do arquivo bruto original da B3 (`COTAHIST_AYYYY.TXT`).
-- Caminho: `D:/b3_datalake/raw/cotahist/ano=YYYY/COTAHIST_AYYYY.TXT`.
+- Caminho: `/mnt/d/b3_datalake/raw/cotahist/ano=YYYY/COTAHIST_AYYYY.TXT`.
 - Nunca alterar, recortar ou editar o conteúdo dos arquivos brutos baixados.
 
 ### Camada 1: Bronze (Raw Ingestion + System Metadata)
@@ -36,15 +36,15 @@ O armazenamento simula um bucket de Object Storage no HD externo:
   - `_ingested_at` (`TIMESTAMP`): Timestamp exato do processamento.
   - `_source_file` (`VARCHAR`): Nome do arquivo físico de origem.
   - `_dag_run_id` (`VARCHAR`): ID da execução do Airflow.
-- Salvar em: `D:/b3_datalake/bronze/cotahist/year=YYYY/_ingested_date=YYYY-MM-DD_HH-MM-SS/`.
+- Salvar em: `/mnt/d/b3_datalake/bronze/cotahist/year=YYYY/_ingested_date=YYYY-MM-DD_HH-MM-SS/`.
 
 ### Camada 2: Silver (Cleansed, Typed, Deduplicated & Partitioned)
 
 - Aplicar parsing posicional dos campos, conversão de tipos primitivos, deduplicação e filtro de dados válidos.
 - Salvar em formato Parquet com particionamento Hive por data:
-  `D:/b3_datalake/silver/cotacoes/data_pregao=YYYY-MM-DD/`.
+  `/mnt/d/b3_datalake/silver/cotacoes_historicas/data_pregao=YYYY-MM-DD/`.
 
 ### Camada 3: Gold (Business Aggregates & Datamarts)
 
 - Tabelas agregadas e visões prontas para consumo analítico e BI.
-- Salvar em: `D:/b3_datalake/gold/`.
+- Salvar em: `/mnt/d/b3_datalake/gold/`.
