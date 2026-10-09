@@ -28,6 +28,7 @@ def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:
         # 1. Validação para Windows (ex: 'D:\...')
         if path.drive:
             drive = Path(path.drive + "\\")
+
             if not drive.exists():
                 missing_directories.append(directory)
                 continue
@@ -35,6 +36,7 @@ def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:
         # 2. Validação para WSL / Linux (ex: '/mnt/d/...')
         elif len(path.parts) >= 3 and path.parts[1] == "mnt":
             mount_point = Path(f"/{path.parts[1]}/{path.parts[2]}")
+
             if not mount_point.exists():
                 missing_directories.append(directory)
                 continue
@@ -45,7 +47,7 @@ def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:
 
     return missing_directories
 
-def ensure_directory_available(directory: str) -> bool:
+def ensure_directory_available(directory: str) -> None:
     """
     Verifica se a unidade/ponto de montagem está disponível
     e garante que o diretório exista (criando-o se necessário).
@@ -57,28 +59,28 @@ def ensure_directory_available(directory: str) -> bool:
 
     Retorna
     -------
-    bool
-        True  -> unidade disponível e diretório existente/criado com sucesso.
-        False -> unidade indisponível ou erro de permissão/sistema.
+    None
+        Retorna normalmente se o diretório estiver disponível. Erros de
+        montagem, permissão ou sistema são propagados ao chamador.
     """
-    try:
-        path = Path(directory)
+    path = Path(directory)
 
-        # 1. Validação para Windows (ex: 'D:\...')
-        if path.drive:
-            drive = Path(path.drive + "\\")
-            if not drive.exists():
-                return False
+    # 1. Validação para Windows (ex: 'D:\...')
+    if path.drive:
+        drive = Path(path.drive + "\\")
 
-        # 2. Validação para WSL / Linux (ex: '/mnt/d/...')
-        elif len(path.parts) >= 3 and path.parts[1] == "mnt":
-            mount_point = Path(f"/{path.parts[1]}/{path.parts[2]}")
-            if not mount_point.exists():
-                return False
+        if not drive.exists():
+            raise FileNotFoundError(f"Unidade indisponível: {drive}")
 
-        # 3. Cria o diretório (e subpastas) caso não exista
-        path.mkdir(parents=True, exist_ok=True)
-        return True
+    # 2. Validação para WSL / Linux (ex: '/mnt/d/...')
+    elif len(path.parts) >= 3 and path.parts[1] == "mnt":
+        mount_point = Path(f"/{path.parts[1]}/{path.parts[2]}")
 
-    except Exception:
-        return False
+        if not mount_point.exists():
+            raise FileNotFoundError(f"Ponto de montagem indisponível: {mount_point}")
+
+    # Cria o diretório (e subpastas) caso não exista; deixa erros explícitos.
+    path.mkdir(parents=True, exist_ok=True)
+
+    if not path.is_dir():
+        raise NotADirectoryError(f"O caminho não é um diretório: {path}")

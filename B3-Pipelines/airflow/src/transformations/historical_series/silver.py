@@ -1,25 +1,17 @@
 import logging
 import os
-import sys
+import re
 from pathlib import Path
 from typing import Optional
 import duckdb
 
-SRC_DIR = Path(__file__).resolve().parents[2]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-from bronze import list_bronze_dirs
+from transformations.historical_series.bronze import list_bronze_dirs
 from utils.helpers import check_directories_exist, ensure_directory_available
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("ingestao_b3_silver")
+logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = "/mnt/d/b3_datalake/silver/cotacoes_historicas"
+BRONZE_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
 COPY_QUERY = """
     COPY (
         WITH parsed AS (
@@ -35,7 +27,7 @@ COPY_QUERY = """
                 _ingested_at,
                 _source_file,
                 $dag_run_id AS _dag_run_id
-            FROM read_parquet($input_file, union_by_name = true, hive_partitioning = true)
+            FROM read_parquet($input_files, union_by_name = true, hive_partitioning = true)
             WHERE SUBSTR(content, 1, 2) = '01'
         )
         SELECT
@@ -52,8 +44,8 @@ COPY_QUERY = """
             _dag_run_id
         FROM parsed
         QUALIFY row_number() OVER (
-            PARTITION BY ticker, data_pregao 
-            ORDER BY _ingested_at DESC
+            PARTITION BY ticker, data_pregao, tipo_mercado
+            ORDER BY _ingested_at DESC, _source_file DESC
         ) = 1
     ) TO $output_dir (
         FORMAT PARQUET,
@@ -69,82 +61,102 @@ def execute_silver_load(
     start_year: int,
     end_year: int,
     memory_limit: Optional[str] = "4GB",
-    threads: Optional[int] = None
+    threads: Optional[int] = None,
+    input_dir: str = BRONZE_DIR,
+    output_dir: str = OUTPUT_DIR,
 ) -> None:
     """
     Executa a carga da camada Silver processando a partição Bronze mais recente de cada ano.
-    Utiliza multithreading nativo do DuckDB para gravação paralela via PER_THREAD_OUTPUT.
+    Processa todos os arquivos Parquet da partição Bronze mais recente de cada ano.
+
+    input_dir / output_dir:
+        Diretórios base das camadas Bronze e Silver.
     """
+    if start_year > end_year:
+        raise ValueError("start_year deve ser menor ou igual a end_year.")
+    if threads is not None and threads <= 0:
+        raise ValueError("threads deve ser maior que zero.")
+
+    _validate_memory_limit(memory_limit)
+
     try:
-        if not ensure_directory_available(OUTPUT_DIR):
-            logger.error(f"Diretório de saída indisponível: {OUTPUT_DIR}")
-            return
+        ensure_directory_available(output_dir)
 
         logger.info("Iniciando carga da Camada Silver...")
-        bronze_dirs = list_bronze_dirs(start_year, end_year)
-
-        if not bronze_dirs:
-            logger.warning("Nenhum diretório Bronze encontrado.")
-            return
-
+        bronze_dirs = list_bronze_dirs(start_year, end_year, input_dir)
         missing_dirs = check_directories_exist(bronze_dirs)
-
-        if missing_dirs:
-            logger.error(f"Diretórios Bronze inexistentes: {missing_dirs}")
-            return
-
-        total_threads = threads or (os.cpu_count() or 4)
         
-        # Conexão centralizada em memória aproveitando todas as threads do DuckDB
-        con = duckdb.connect(":memory:")
-        con.execute("SET preserve_insertion_order = false;")
-        con.execute(f"SET threads = {total_threads};")
-
-        if memory_limit:
-            con.execute(f"SET memory_limit = '{memory_limit}';")
-
-        logger.info(f"Threads DuckDB configuradas: {total_threads}")
-
-        for bronze_dir in bronze_dirs:
-            recent_parquet = _find_most_recent_parquet(bronze_dir)
-
-            if not recent_parquet:
-                logger.warning(f"Nenhum arquivo Parquet encontrado em: {bronze_dir}")
-                continue
-
-            logger.info(f"Processando arquivo Bronze: {recent_parquet}")
-
-            con.execute(
-                COPY_QUERY,
-                {
-                    "input_file": recent_parquet,
-                    "output_dir": OUTPUT_DIR,
-                    "dag_run_id": dag_run_id,
-                },
+        if missing_dirs:
+            raise FileNotFoundError(
+                f"Diretórios Bronze inexistentes: {', '.join(missing_dirs)}"
             )
 
-        con.close()
+        total_threads = threads if threads is not None else (os.cpu_count() or 4)
+        con = duckdb.connect(":memory:")
+
+        try:
+            con.execute("SET preserve_insertion_order = false;")
+            con.execute(f"SET threads = {total_threads};")
+
+            if memory_limit:
+                con.execute(f"SET memory_limit = '{memory_limit}';")
+
+            logger.info(f"Threads DuckDB configuradas: {total_threads}")
+
+            for bronze_dir in bronze_dirs:
+                recent_parquets = _find_most_recent_parquets(bronze_dir)
+
+                if not recent_parquets:
+                    raise FileNotFoundError(
+                        f"Nenhum arquivo Parquet encontrado em: {bronze_dir}"
+                    )
+
+                logger.info(
+                    "Processando %s arquivo(s) Bronze da partição mais recente em %s",
+                    len(recent_parquets),
+                    bronze_dir,
+                )
+                con.execute(
+                    COPY_QUERY,
+                    {
+                        "input_files": recent_parquets,
+                        "output_dir": output_dir,
+                        "dag_run_id": dag_run_id,
+                    },
+                )
+        finally:
+            con.close()
+
         logger.info("✅ Carga da Camada Silver concluída com sucesso!")
 
     except Exception:
         logger.exception("❌ Erro durante a carga da Camada Silver.")
         raise
 
-def _find_most_recent_parquet(bronze_year_dir: str) -> Optional[str]:
+def _find_most_recent_parquets(bronze_year_dir: str) -> list[str]:
     """
-    Encontra o arquivo Parquet na partição _ingested_date=YYYY-MM-DD_HH-MM-SS mais recente.
+    Retorna todos os Parquets da partição _ingested_date mais recente.
     """
     year_path = Path(bronze_year_dir)
     ingest_dirs = [d for d in year_path.glob("_ingested_date=*") if d.is_dir()]
 
     if not ingest_dirs:
-        parquets = list(year_path.rglob("*.parquet"))
-        return str(max(parquets, key=lambda x: x.stat().st_mtime)) if parquets else None
+        return sorted(str(path) for path in year_path.rglob("*.parquet"))
 
-    # Ordenação lexicográfica natural pelo nome da partição ISO (_ingested_date=...)
     latest_dir = max(ingest_dirs, key=lambda d: d.name)
-    parquets = list(latest_dir.glob("*.parquet"))
+    return sorted(str(path) for path in latest_dir.rglob("*.parquet"))
 
-    return str(parquets[0]) if parquets else None
+def _validate_memory_limit(memory_limit: Optional[str]) -> None:
+    if memory_limit is None:
+        return
 
-execute_silver_load("teste-123", 2024, 2025, memory_limit="8GB", threads=8)
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(B|KB|MB|GB|TB)\s*",
+        memory_limit,
+        flags=re.IGNORECASE,
+    )
+
+    if match is None or float(match.group(1)) <= 0:
+        raise ValueError(
+            "memory_limit deve ser uma quantidade positiva em B, KB, MB, GB ou TB."
+        )

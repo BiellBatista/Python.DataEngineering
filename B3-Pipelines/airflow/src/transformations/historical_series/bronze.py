@@ -1,7 +1,9 @@
 import logging
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -13,25 +15,21 @@ import duckdb
 from ingestion.historical_series.raw import list_raw_dirs
 from utils.helpers import ensure_directory_available
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger("ingestao_b3_bronze")
+logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
+DEFAULT_MAX_WORKERS = 4
 # Utilizado r"""...""" para preservar as barras invertidas do RegEx (\d)
 COPY_QUERY = r"""
     COPY (
         SELECT
             content,
-            now() AS _ingested_at,
+            $ingestion_time AS _ingested_at,
             filename AS _source_file,
             $dag_run_id AS _dag_run_id,
             -- TRY_CAST evita quebra se algum arquivo não tiver o ano de 4 dígitos no nome
             TRY_CAST(regexp_extract(filename, 'COTAHIST_A(\d{4})', 1) AS INTEGER) AS year,
-            strftime(now(), '%Y-%m-%d_%H-%M-%S') AS _ingested_date
+            strftime($ingestion_time, '%Y-%m-%d_%H-%M-%S') AS _ingested_date
         FROM read_csv(
             $input_dir,
             header=False,
@@ -57,6 +55,9 @@ def execute_bronze_load(
     memory_limit: Optional[str] = None,
     threads: Optional[int] = None,
     max_workers: Optional[int] = None,
+    input_dir: str = "/mnt/d/b3_datalake/raw/cotahist",
+    output_dir: str = OUTPUT_DIR,
+    ingestion_time: Optional[datetime] = None,
 ) -> None:
     """
     Executa a carga Bronze de forma paralela.
@@ -80,29 +81,36 @@ def execute_bronze_load(
     max_workers:
         Número máximo de raw_dirs processados simultaneamente.
         Se omitido, utiliza no máximo 4 workers.
+
+    input_dir / output_dir:
+        Diretórios base das camadas RAW e Bronze.
+
+    ingestion_time:
+        Timestamp lógico da carga. Para retries Airflow idempotentes, passe
+        o mesmo timestamp lógico da DAG em todas as tentativas.
     """
 
-    try:
-        if not ensure_directory_available(OUTPUT_DIR):
-            logger.error(f"Diretório de saída inválido: {OUTPUT_DIR}")
-            return
+    if start_year > end_year:
+        raise ValueError("start_year deve ser menor ou igual a end_year.")
+    if threads is not None and threads <= 0:
+        raise ValueError("threads deve ser maior que zero.")
+    if max_workers is not None and max_workers <= 0:
+        raise ValueError("max_workers deve ser maior que zero.")
+    _validate_memory_limit(memory_limit)
+    effective_ingestion_time = ingestion_time or datetime.now(timezone.utc)
 
+    try:
+        ensure_directory_available(output_dir)
         logger.info("Iniciando carga da Camada Bronze...")
 
-        raw_dirs = list_raw_dirs(start_year, end_year)
+        raw_dirs = list_raw_dirs(start_year, end_year, input_dir)
 
         if not raw_dirs:
-            logger.warning("Nenhum diretório RAW encontrado. Nada para processar.")
-            return
+            raise FileNotFoundError("Nenhum arquivo RAW encontrado para processar.")
 
-        total_threads = threads or (os.cpu_count() or 1)
-        # Evita criar workers demais.
-        #
-        # Exemplo:
-        # CPU = 16
-        # raw_dirs = 10
-        # -> no máximo 4 workers
-        workers = min(max_workers or 4, len(raw_dirs), total_threads)
+        total_threads = threads if threads is not None else (os.cpu_count() or 1)
+        worker_limit = max_workers if max_workers is not None else DEFAULT_MAX_WORKERS
+        workers = min(worker_limit, len(raw_dirs), total_threads)
         # Divide o orçamento total de threads
         # entre os workers.
         threads_per_worker = max(1, total_threads // workers)
@@ -111,7 +119,7 @@ def execute_bronze_load(
         logger.info(f"Workers paralelos: {workers}")
         logger.info(f"Threads DuckDB por worker: {threads_per_worker}")
         logger.info(f"Threads totais máximas: {workers * threads_per_worker}")
-        logger.info(f"Destino: {OUTPUT_DIR}")
+        logger.info(f"Destino: {output_dir}")
 
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bronze-worker") as executor:
             futures = {
@@ -119,9 +127,10 @@ def execute_bronze_load(
                     _load_raw_dir,
                     raw_dir,
                     dag_run_id,
-                    OUTPUT_DIR,
+                    output_dir,
                     memory_limit,
                     threads_per_worker,
+                    effective_ingestion_time,
                 ): raw_dir
                 for raw_dir in raw_dirs
             }
@@ -147,6 +156,7 @@ def _load_raw_dir(
     output_dir: str,
     memory_limit: Optional[str],
     duckdb_threads: int,
+    ingestion_time: datetime,
 ) -> None:
     """
     Executa a ingestão de um único raw_dir.
@@ -176,6 +186,7 @@ def _load_raw_dir(
                 "input_dir": raw_dir,
                 "output_dir": output_dir,
                 "dag_run_id": dag_run_id,
+                "ingestion_time": ingestion_time,
             },
         )
 
@@ -189,9 +200,27 @@ def _load_raw_dir(
         if con is not None:
             con.close()
 
-def list_bronze_dirs(start_year: int, end_year: int) -> list[str]:
+def _validate_memory_limit(memory_limit: Optional[str]) -> None:
+    if memory_limit is None:
+        return
+
+    match = re.fullmatch(
+        r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(B|KB|MB|GB|TB)\s*",
+        memory_limit,
+        flags=re.IGNORECASE,
+    )
+    if match is None or float(match.group(1)) <= 0:
+        raise ValueError(
+            "memory_limit deve ser uma quantidade positiva em B, KB, MB, GB ou TB."
+        )
+
+def list_bronze_dirs(
+    start_year: int,
+    end_year: int,
+    output_dir: str = OUTPUT_DIR,
+) -> list[str]:
     """
-    Lista os diretórios da Camada Bronze no caminho especificado.
+    Gera os caminhos esperados das partições Bronze no intervalo solicitado.
 
     Parâmetros
     ----------
@@ -201,15 +230,12 @@ def list_bronze_dirs(start_year: int, end_year: int) -> list[str]:
     Retorna
     -------
     List[str]:
-        Lista de caminhos dos diretórios da Camada Bronze.
+        Caminhos esperados das partições da Camada Bronze.
     """
-    directories = []
+    if start_year > end_year:
+        raise ValueError("start_year deve ser menor ou igual a end_year.")
 
-    for year in range(start_year, end_year + 1):
-        directory = os.path.join(OUTPUT_DIR, f"year={year}")
-        if os.path.exists(directory):
-            directories.append(directory)
-
-    return directories
-
-execute_bronze_load("teste-123", 2024, 2025, memory_limit="8GB", threads=8, max_workers=4)
+    return [
+        os.path.join(output_dir, f"year={year}")
+        for year in range(start_year, end_year + 1)
+    ]

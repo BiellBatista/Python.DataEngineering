@@ -1,17 +1,31 @@
-import os
+from pathlib import Path
+from typing import Union
 
-def get_raw_dir(year) -> str:
-    raw_dir = f"/mnt/d/b3_datalake/raw/cotahist/ano={year}/COTAHIST_A{year}.TXT"
 
-    return raw_dir
+RAW_DIR = Path("/mnt/d/b3_datalake/raw/cotahist")
 
-def list_raw_dirs(start_year, end_year) -> list[str]:
-    raw_dirs = []
 
-    for year in range(start_year, end_year + 1):
-        raw_dir = get_raw_dir(year)
+def get_raw_dir(year: int, base_dir: Union[str, Path] = RAW_DIR) -> str:
+    return str(Path(base_dir) / f"ano={year}" / f"COTAHIST_A{year}.TXT")
 
-        if os.path.exists(raw_dir):
-            raw_dirs.append(raw_dir)
+def list_raw_dirs(
+    start_year: int,
+    end_year: int,
+    base_dir: Union[str, Path] = RAW_DIR,
+) -> list[str]:
+    if start_year > end_year:
+        raise ValueError("start_year deve ser menor ou igual a end_year.")
+
+    raw_dirs = [
+        get_raw_dir(year, base_dir)
+        for year in range(start_year, end_year + 1)
+    ]
+    missing_files = [raw_dir for raw_dir in raw_dirs if not Path(raw_dir).is_file()]
+
+    if missing_files:
+        raise FileNotFoundError(
+            "Arquivos RAW ausentes para o intervalo solicitado: "
+            + ", ".join(missing_files)
+        )
 
     return raw_dirs
