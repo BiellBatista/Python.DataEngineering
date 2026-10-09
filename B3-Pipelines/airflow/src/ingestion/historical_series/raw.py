@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Union
 
-
 RAW_DIR = Path("/mnt/d/b3_datalake/raw/cotahist")
-
 
 def get_raw_dir(year: int, base_dir: Union[str, Path] = RAW_DIR) -> str:
     return str(Path(base_dir) / f"ano={year}" / f"COTAHIST_A{year}.TXT")

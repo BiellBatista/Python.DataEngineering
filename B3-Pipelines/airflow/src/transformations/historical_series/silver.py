@@ -1,10 +1,9 @@
+import duckdb
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Optional
-import duckdb
-
 from transformations.historical_series.bronze import list_bronze_dirs
 from utils.helpers import check_directories_exist, ensure_directory_available
 
@@ -83,6 +82,7 @@ def execute_silver_load(
         ensure_directory_available(output_dir)
 
         logger.info("Iniciando carga da Camada Silver...")
+
         bronze_dirs = list_bronze_dirs(start_year, end_year, input_dir)
         missing_dirs = check_directories_exist(bronze_dirs)
         

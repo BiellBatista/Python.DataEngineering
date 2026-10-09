@@ -1,18 +1,11 @@
+import duckdb
 import logging
 import os
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
-
-SRC_DIR = Path(__file__).resolve().parents[2]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-import duckdb
 from ingestion.historical_series.raw import list_raw_dirs
+from typing import Optional
 from utils.helpers import ensure_directory_available
 
 logger = logging.getLogger(__name__)
@@ -101,6 +94,7 @@ def execute_bronze_load(
 
     try:
         ensure_directory_available(output_dir)
+
         logger.info("Iniciando carga da Camada Bronze...")
 
         raw_dirs = list_raw_dirs(start_year, end_year, input_dir)
@@ -134,8 +128,8 @@ def execute_bronze_load(
                 ): raw_dir
                 for raw_dir in raw_dirs
             }
-
             completed = 0
+
             for future in as_completed(futures):
                 # Se algum worker falhar, a exceção é
                 # propagada para esta função.
