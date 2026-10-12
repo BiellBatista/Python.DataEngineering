@@ -1,19 +1,35 @@
-import duckdb
 import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from ingestion.historical_series.raw import list_raw_dirs
 from typing import Optional
+
+import duckdb
+
+from config import (
+    BRONZE_COTAHIST_DIR,
+    BRONZE_MAX_WORKERS,
+    BRONZE_YEAR_PARTITION_TEMPLATE,
+    DUCKDB_MEMORY_LIMIT,
+    DUCKDB_MEMORY_LIMIT_PATTERN,
+    DUCKDB_PRESERVE_INSERTION_ORDER,
+    DUCKDB_THREADS,
+    INGESTED_DATE_FORMAT,
+    PARQUET_COMPRESSION,
+    PARQUET_ROW_GROUP_SIZE,
+    RAW_COTAHIST_DIR,
+    RAW_FILENAME_YEAR_PATTERN,
+    RAW_TEXT_DELIMITER,
+    RAW_TEXT_QUOTE,
+)
+from historical_series.ingestion.raw import list_raw_dirs
 from utils.helpers import ensure_directory_available
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
-DEFAULT_MAX_WORKERS = 4
 # Utilizado r"""...""" para preservar as barras invertidas do RegEx (\d)
-COPY_QUERY = r"""
+COPY_QUERY = rf"""
     /*
     ===========================================================================
     INGESTÃO BRONZE - COTAHIST B3 (DuckDB / CSV -> Parquet Bruto)
@@ -52,22 +68,22 @@ COPY_QUERY = r"""
             filename AS _source_file,
             $dag_run_id AS _dag_run_id,
             -- TRY_CAST evita quebra se algum arquivo não tiver o ano de 4 dígitos no nome
-            TRY_CAST(regexp_extract(filename, 'COTAHIST_A(\d{4})', 1) AS INTEGER) AS year,
-            strftime($ingestion_time, '%Y-%m-%d_%H-%M-%S') AS _ingested_date
+            TRY_CAST(regexp_extract(filename, '{RAW_FILENAME_YEAR_PATTERN}', 1) AS INTEGER) AS year,
+            strftime($ingestion_time, '{INGESTED_DATE_FORMAT}') AS _ingested_date
         FROM read_csv(
             $input_dir,
             header=False,
-            delim='\n',
-            quote='',
-            columns={'content': 'VARCHAR'},
+            delim='{RAW_TEXT_DELIMITER}',
+            quote='{RAW_TEXT_QUOTE}',
+            columns={{'content': 'VARCHAR'}},
             filename=True,
             parallel=True
         )
     ) TO $output_dir (
         FORMAT PARQUET,
         PARTITION_BY (year, _ingested_date),
-        COMPRESSION 'ZSTD',
-        ROW_GROUP_SIZE 122880,
+        COMPRESSION '{PARQUET_COMPRESSION}',
+        ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE},
         OVERWRITE_OR_IGNORE
     );
 """
@@ -76,11 +92,11 @@ def execute_bronze_load(
     dag_run_id: str,
     start_year: int,
     end_year: int,
-    memory_limit: Optional[str] = None,
-    threads: Optional[int] = None,
-    max_workers: Optional[int] = None,
-    input_dir: str = "/mnt/d/b3_datalake/raw/cotahist",
-    output_dir: str = OUTPUT_DIR,
+    memory_limit: Optional[str] = DUCKDB_MEMORY_LIMIT,
+    threads: Optional[int] = DUCKDB_THREADS,
+    max_workers: Optional[int] = BRONZE_MAX_WORKERS,
+    input_dir: str = RAW_COTAHIST_DIR,
+    output_dir: str = BRONZE_COTAHIST_DIR,
     ingestion_time: Optional[datetime] = None,
 ) -> None:
     """
@@ -134,7 +150,7 @@ def execute_bronze_load(
             raise FileNotFoundError("Nenhum arquivo RAW encontrado para processar.")
 
         total_threads = threads if threads is not None else (os.cpu_count() or 1)
-        worker_limit = max_workers if max_workers is not None else DEFAULT_MAX_WORKERS
+        worker_limit = max_workers if max_workers is not None else BRONZE_MAX_WORKERS
         workers = min(worker_limit, len(raw_dirs), total_threads)
         # Divide o orçamento total de threads
         # entre os workers.
@@ -196,7 +212,10 @@ def _load_raw_dir(
 
         con = duckdb.connect()
         # Reduz consumo de memória durante leitura/escrita.
-        con.execute("SET preserve_insertion_order = false;")
+        con.execute(
+            f"SET preserve_insertion_order = "
+            f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
+        )
 
         if memory_limit:
             logger.info(f"[{raw_dir}] memory_limit={memory_limit}")
@@ -230,7 +249,7 @@ def _validate_memory_limit(memory_limit: Optional[str]) -> None:
         return
 
     match = re.fullmatch(
-        r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(B|KB|MB|GB|TB)\s*",
+        DUCKDB_MEMORY_LIMIT_PATTERN,
         memory_limit,
         flags=re.IGNORECASE,
     )
@@ -242,7 +261,7 @@ def _validate_memory_limit(memory_limit: Optional[str]) -> None:
 def list_bronze_dirs(
     start_year: int,
     end_year: int,
-    output_dir: str = OUTPUT_DIR,
+    output_dir: str = BRONZE_COTAHIST_DIR,
 ) -> list[str]:
     """
     Gera os caminhos esperados das partições Bronze no intervalo solicitado.
@@ -261,6 +280,9 @@ def list_bronze_dirs(
         raise ValueError("start_year deve ser menor ou igual a end_year.")
 
     return [
-        os.path.join(output_dir, f"year={year}")
+        os.path.join(
+            output_dir,
+            BRONZE_YEAR_PARTITION_TEMPLATE.format(year=year),
+        )
         for year in range(start_year, end_year + 1)
     ]

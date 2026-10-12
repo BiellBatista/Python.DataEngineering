@@ -1,6 +1,6 @@
-import os
-import sys
 import duckdb
+
+from config import SILVER_COTAHIST_DIR
 
 # Permite autocompletar e navegar no histórico com as setas do teclado (Linux/WSL)
 try:
@@ -8,9 +8,7 @@ try:
 except ImportError:
     pass
 
-SILVER_DIR = "/mnt/d/b3_datalake/silver/cotacoes_historicas"
-
-def start_interactive_cli(silver_dir: str):
+def start_interactive_cli(silver_dir: str = SILVER_COTAHIST_DIR) -> None:
     parquet_pattern = f"{silver_dir.rstrip('/')}/**/*.parquet"
     
     print("=" * 70)
@@ -75,4 +73,4 @@ def start_interactive_cli(silver_dir: str):
             print(f"❌ Erro na execução do SQL: {err}\n")
 
 if __name__ == "__main__":
-    start_interactive_cli(SILVER_DIR)
+    start_interactive_cli()

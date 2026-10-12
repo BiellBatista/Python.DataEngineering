@@ -1,17 +1,46 @@
-import duckdb
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Optional
-from transformations.historical_series.bronze import list_bronze_dirs
+
+import duckdb
+
+from config import (
+    B3_CLOSE_PRICE_START,
+    B3_DECIMAL_SCALE,
+    B3_HIGH_PRICE_START,
+    B3_LOW_PRICE_START,
+    B3_MARKET_TYPE_LENGTH,
+    B3_MARKET_TYPE_START,
+    B3_OPEN_PRICE_START,
+    B3_PRICE_LENGTH,
+    B3_RECORD_TYPE_LENGTH,
+    B3_RECORD_TYPE_CODE,
+    B3_RECORD_TYPE_START,
+    B3_TICKER_LENGTH,
+    B3_TICKER_START,
+    B3_TOTAL_VOLUME_LENGTH,
+    B3_TOTAL_VOLUME_START,
+    B3_TRADE_DATE_FORMAT,
+    B3_TRADE_DATE_LENGTH,
+    B3_TRADE_DATE_START,
+    BRONZE_COTAHIST_DIR,
+    DUCKDB_MEMORY_LIMIT,
+    DUCKDB_MEMORY_LIMIT_PATTERN,
+    DUCKDB_PRESERVE_INSERTION_ORDER,
+    DUCKDB_THREADS,
+    INGESTED_DATE_PARTITION_NAME,
+    PARQUET_COMPRESSION,
+    PARQUET_ROW_GROUP_SIZE,
+    SILVER_COTAHIST_DIR,
+)
+from historical_series.transformations.bronze import list_bronze_dirs
 from utils.helpers import check_directories_exist, ensure_directory_available
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = "/mnt/d/b3_datalake/silver/cotacoes_historicas"
-BRONZE_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
-COPY_QUERY = """
+COPY_QUERY = f"""
     /*
     ===========================================================================
     TRANSFORMAÇÃO SILVER - COTAHIST B3 (DuckDB / Parquet)
@@ -51,19 +80,19 @@ COPY_QUERY = """
     COPY (
         WITH parsed AS (
             SELECT
-                strptime(SUBSTR(content, 3, 8), '%Y%m%d')::DATE AS data_pregao,
-                TRIM(SUBSTR(content, 13, 12)) AS ticker,
-                SUBSTR(content, 25, 3) AS tipo_mercado,
-                CAST(SUBSTR(content, 57, 13) AS DOUBLE) / 100.0 AS preco_abertura,
-                CAST(SUBSTR(content, 70, 13) AS DOUBLE) / 100.0 AS preco_maximo,
-                CAST(SUBSTR(content, 83, 13) AS DOUBLE) / 100.0 AS preco_minimo,
-                CAST(SUBSTR(content, 109, 13) AS DOUBLE) / 100.0 AS preco_fechamento,
-                CAST(SUBSTR(content, 171, 18) AS DOUBLE) / 100.0 AS volume_total,
+                strptime(SUBSTR(content, {B3_TRADE_DATE_START}, {B3_TRADE_DATE_LENGTH}), '{B3_TRADE_DATE_FORMAT}')::DATE AS data_pregao,
+                TRIM(SUBSTR(content, {B3_TICKER_START}, {B3_TICKER_LENGTH})) AS ticker,
+                SUBSTR(content, {B3_MARKET_TYPE_START}, {B3_MARKET_TYPE_LENGTH}) AS tipo_mercado,
+                CAST(SUBSTR(content, {B3_OPEN_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_abertura,
+                CAST(SUBSTR(content, {B3_HIGH_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_maximo,
+                CAST(SUBSTR(content, {B3_LOW_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_minimo,
+                CAST(SUBSTR(content, {B3_CLOSE_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_fechamento,
+                CAST(SUBSTR(content, {B3_TOTAL_VOLUME_START}, {B3_TOTAL_VOLUME_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS volume_total,
                 _ingested_at,
                 _source_file,
                 $dag_run_id AS _dag_run_id
             FROM read_parquet($input_files, union_by_name = true, hive_partitioning = true)
-            WHERE SUBSTR(content, 1, 2) = '01'
+            WHERE SUBSTR(content, {B3_RECORD_TYPE_START}, {B3_RECORD_TYPE_LENGTH}) = '{B3_RECORD_TYPE_CODE}'
         )
         SELECT
             data_pregao,
@@ -85,8 +114,8 @@ COPY_QUERY = """
     ) TO $output_dir (
         FORMAT PARQUET,
         PARTITION_BY (data_pregao),
-        COMPRESSION 'ZSTD',
-        ROW_GROUP_SIZE 122880,
+        COMPRESSION '{PARQUET_COMPRESSION}',
+        ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE},
         OVERWRITE_OR_IGNORE
     );
 """
@@ -95,10 +124,10 @@ def execute_silver_load(
     dag_run_id: str,
     start_year: int,
     end_year: int,
-    memory_limit: Optional[str] = "4GB",
-    threads: Optional[int] = None,
-    input_dir: str = BRONZE_DIR,
-    output_dir: str = OUTPUT_DIR,
+    memory_limit: Optional[str] = DUCKDB_MEMORY_LIMIT,
+    threads: Optional[int] = DUCKDB_THREADS,
+    input_dir: str = BRONZE_COTAHIST_DIR,
+    output_dir: str = SILVER_COTAHIST_DIR,
 ) -> None:
     """
     Executa a carga da camada Silver processando a partição Bronze mais recente de cada ano.
@@ -131,7 +160,10 @@ def execute_silver_load(
         con = duckdb.connect(":memory:")
 
         try:
-            con.execute("SET preserve_insertion_order = false;")
+            con.execute(
+                f"SET preserve_insertion_order = "
+                f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
+            )
             con.execute(f"SET threads = {total_threads};")
 
             if memory_limit:
@@ -174,7 +206,11 @@ def _find_most_recent_parquets(bronze_year_dir: str) -> list[str]:
     Retorna todos os Parquets da partição _ingested_date mais recente.
     """
     year_path = Path(bronze_year_dir)
-    ingest_dirs = [d for d in year_path.glob("_ingested_date=*") if d.is_dir()]
+    ingest_dirs = [
+        d
+        for d in year_path.glob(f"{INGESTED_DATE_PARTITION_NAME}=*")
+        if d.is_dir()
+    ]
 
     if not ingest_dirs:
         return sorted(str(path) for path in year_path.rglob("*.parquet"))
@@ -187,7 +223,7 @@ def _validate_memory_limit(memory_limit: Optional[str]) -> None:
         return
 
     match = re.fullmatch(
-        r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(B|KB|MB|GB|TB)\s*",
+        DUCKDB_MEMORY_LIMIT_PATTERN,
         memory_limit,
         flags=re.IGNORECASE,
     )

@@ -1,15 +1,19 @@
 from pathlib import Path
 from typing import Union
 
-RAW_DIR = Path("/mnt/d/b3_datalake/raw/cotahist")
+from config import RAW_COTAHIST_DIR, RAW_FILENAME_TEMPLATE, RAW_YEAR_DIRECTORY_TEMPLATE
 
-def get_raw_dir(year: int, base_dir: Union[str, Path] = RAW_DIR) -> str:
-    return str(Path(base_dir) / f"ano={year}" / f"COTAHIST_A{year}.TXT")
+def get_raw_dir(year: int, base_dir: Union[str, Path] = RAW_COTAHIST_DIR) -> str:
+    return str(
+        Path(base_dir)
+        / RAW_YEAR_DIRECTORY_TEMPLATE.format(year=year)
+        / RAW_FILENAME_TEMPLATE.format(year=year)
+    )
 
 def list_raw_dirs(
     start_year: int,
     end_year: int,
-    base_dir: Union[str, Path] = RAW_DIR,
+    base_dir: Union[str, Path] = RAW_COTAHIST_DIR,
 ) -> list[str]:
     if start_year > end_year:
         raise ValueError("start_year deve ser menor ou igual a end_year.")

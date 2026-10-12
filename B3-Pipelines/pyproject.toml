@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "b3-pipelines"
+version = "0.1.0"
+description = "Pipeline de dados históricos da B3 com DuckDB e Parquet"
+requires-python = ">=3.10"
+dependencies = [
+    "apache-airflow==3.3.1",
+    "duckdb==1.5.5",
+    "pandas==3.0.6",
+    "pyarrow==25.0.1",
+    "setuptools>=68",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["config", "main", "run_sql"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["historical_series*", "utils*"]
+
+[tool.pyright]
+extraPaths = ["src"]
