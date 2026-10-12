@@ -14,6 +14,37 @@ OUTPUT_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
 DEFAULT_MAX_WORKERS = 4
 # Utilizado r"""...""" para preservar as barras invertidas do RegEx (\d)
 COPY_QUERY = r"""
+    /*
+    ===========================================================================
+    INGESTÃO BRONZE - COTAHIST B3 (DuckDB / CSV -> Parquet Bruto)
+    ===========================================================================
+    Esta consulta lê os arquivos de texto bruto (TXT) originais da B3 e os 
+    converte para o formato Parquet na camada Bronze, aplicando:
+
+    1. Leitura Paralela de Texto Bruto (read_csv):
+       - Lê arquivos linha por linha configurando o delimitador como quebra de 
+         linha (`delim='\n'`) sem cabeçalho (`header=False`).
+       - Desativa o tratamento de aspas (`quote=''`) para evitar falhas de 
+         parsing com caracteres especiais no texto.
+       - Lê a linha inteira como uma única coluna `VARCHAR` chamada `content`.
+       - Habilita `filename=True` para capturar o nome do arquivo de origem e 
+         `parallel=True` para acelerar a leitura multithread pelo DuckDB.
+
+    2. Enriquecimento de Metadados e Particionamento:
+       - _ingested_at: Registra o carimbo de data/hora exato da execução.
+       - _source_file: Armazena o caminho/nome do arquivo original lido.
+       - _dag_run_id: Identifica a execução do pipeline de orquestração.
+       - year: Extrai dinamicamente o ano de 4 dígitos do nome do arquivo 
+         (ex: 'COTAHIST_A2024.TXT') usando RegEx e `TRY_CAST` seguro contra falhas.
+       - _ingested_date: Formata a data/hora da ingestão no padrão 
+         'YYYY-MM-DD_HH-MM-SS' para versionamento das cargas.
+
+    3. Escrita Otimizada na Camada Bronze (COPY TO):
+       - Grava os dados brutos no formato `PARQUET`.
+       - Organiza o particionamento em nível duplo: `PARTITION_BY (year, _ingested_date)`.
+       - Aplica compressão `ZSTD` e define o `ROW_GROUP_SIZE` para 122.880 linhas.
+    ===========================================================================
+    */
     COPY (
         SELECT
             content,

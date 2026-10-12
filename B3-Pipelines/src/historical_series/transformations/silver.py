@@ -12,6 +12,42 @@ logger = logging.getLogger(__name__)
 OUTPUT_DIR = "/mnt/d/b3_datalake/silver/cotacoes_historicas"
 BRONZE_DIR = "/mnt/d/b3_datalake/bronze/cotahist"
 COPY_QUERY = """
+    /*
+    ===========================================================================
+    TRANSFORMAÇÃO SILVER - COTAHIST B3 (DuckDB / Parquet)
+    ===========================================================================
+    Esta consulta executa a consolidação e limpeza dos dados brutos da camada 
+    Bronze, aplicando as seguintes etapas:
+
+    1. Leitura Dinâmica (read_parquet):
+       - Lê os arquivos Parquet da Bronze com suporte a unificação automática 
+         de esquemas (`union_by_name = true`) e hive partitioning.
+
+    2. Filtro de Tipo de Registro (WHERE):
+       - Restringe o processamento apenas aos registros de lote padrão 
+         (`SUBSTR(content, 1, 2) = '01'`), descartando cabeçalhos e trailers.
+
+    3. Parsing Posicional e Tipagem (CTE `parsed`):
+       - Fatia a string bruta da coluna `content` conforme o layout oficial da B3:
+         • data_pregao: Converte a string 'YYYYMMDD' para o tipo `DATE`.
+         • ticker: Código do ativo tratado com `TRIM()`.
+         • tipo_mercado: Código BDI do mercado.
+         • Preços e Volumes: Conversão para `DOUBLE` e divisão por 100.0 
+           para ajustar as casas decimais monetárias.
+
+    4. Deduplicação e Idempotência (QUALIFY):
+       - Utiliza uma Window Function (`row_number`) particionando por 
+         `ticker`, `data_pregao` e `tipo_mercado`, ordenada de forma decrescente 
+         pelo momento da ingestão (`_ingested_at`) e arquivo fonte.
+       - Garante que reprocessamentos (idempotência) mantenham sempre 
+         apenas a versão mais recente do registro.
+
+    5. Escrita Otimizada na Camada Silver (COPY TO):
+       - Grava os dados em formato `PARQUET` particionado por `data_pregao`.
+       - Aplica compressão `ZSTD` e define o `ROW_GROUP_SIZE` para 122.880 linhas,
+         otimizando o desempenho de consultas e o data skipping.
+    ===========================================================================
+    */
     COPY (
         WITH parsed AS (
             SELECT

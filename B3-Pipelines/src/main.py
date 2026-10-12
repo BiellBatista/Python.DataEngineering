@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from transformations.historical_series.bronze import execute_bronze_load
-from transformations.historical_series.silver import execute_silver_load
+from historical_series.transformations.bronze import execute_bronze_load
+from historical_series.transformations.silver import execute_silver_load
 
 
 def main() -> None:
