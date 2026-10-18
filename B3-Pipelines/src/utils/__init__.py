@@ -1,0 +1,1 @@
+"""Funções utilitárias compartilhadas pelo pipeline."""

@@ -1,3 +1,5 @@
+"""Configuração central do pipeline B3 e constantes do layout COTAHIST."""
+
 import os
 from pathlib import Path
 
@@ -18,6 +20,18 @@ SILVER_COTAHIST_DIR = os.getenv(
 
 
 def _positive_int_from_env(name: str, default: int) -> int:
+    """Lê uma variável de ambiente como inteiro positivo.
+
+    Args:
+        name: Nome da variável de ambiente.
+        default: Valor usado quando a variável não está definida.
+
+    Returns:
+        O valor inteiro positivo configurado.
+
+    Raises:
+        ValueError: Se o valor não for um inteiro positivo.
+    """
     value = os.getenv(name, str(default))
 
     try:
@@ -58,6 +72,7 @@ DUCKDB_MEMORY_LIMIT_PATTERN = r"\s*(\d+(?:\.\d+)?|\.\d+)\s*(B|KB|MB|GB|TB)\s*"
 
 PARQUET_COMPRESSION = "ZSTD"
 PARQUET_ROW_GROUP_SIZE = 122880
+PARQUET_PER_THREAD_OUTPUT = False
 DUCKDB_PRESERVE_INSERTION_ORDER = False
 
 B3_RECORD_TYPE_START = 1

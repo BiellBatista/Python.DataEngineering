@@ -1,3 +1,5 @@
+"""Carga dos arquivos COTAHIST RAW para a camada Bronze em Parquet."""
+
 import logging
 import os
 import re
@@ -99,35 +101,27 @@ def execute_bronze_load(
     output_dir: str = BRONZE_COTAHIST_DIR,
     ingestion_time: Optional[datetime] = None,
 ) -> None:
-    """
-    Executa a carga Bronze de forma paralela.
+    """Converte em paralelo os arquivos RAW do intervalo para Parquet Bronze.
 
-    Parâmetros
-    ----------
-    dag_run_id:
-        Identificador da execução do pipeline.
+    Args:
+        dag_run_id: Identificador da execução do pipeline.
+        start_year: Primeiro ano a ingerir.
+        end_year: Último ano a ingerir, inclusive.
+        memory_limit: Limite DuckDB por worker, por exemplo ``"2GB"``.
+            ``None`` deixa o DuckDB usar o padrão.
+        threads: Orçamento total de threads DuckDB, dividido entre workers.
+            ``None`` usa o número de CPUs disponíveis.
+        max_workers: Número máximo de diretórios RAW processados em paralelo.
+            ``None`` usa o padrão configurado.
+        input_dir: Diretório base dos arquivos RAW.
+        output_dir: Diretório raiz de saída da camada Bronze.
+        ingestion_time: Timestamp lógico da ingestão. Usar o mesmo valor nos
+            retries mantém estável a partição temporal da carga.
 
-    start_year / end_year:
-        Intervalo utilizado para localizar os diretórios RAW.
-
-    memory_limit:
-        Limite de memória POR WORKER DuckDB.
-        Ex.: '2GB'.
-
-    threads:
-        Número TOTAL de threads DuckDB desejado.
-        Essas threads serão distribuídas entre os workers.
-
-    max_workers:
-        Número máximo de raw_dirs processados simultaneamente.
-        Se omitido, utiliza no máximo 4 workers.
-
-    input_dir / output_dir:
-        Diretórios base das camadas RAW e Bronze.
-
-    ingestion_time:
-        Timestamp lógico da carga. Para retries Airflow idempotentes, passe
-        o mesmo timestamp lógico da DAG em todas as tentativas.
+    Raises:
+        ValueError: Se anos, concorrência ou limite de memória forem inválidos.
+        FileNotFoundError: Se faltar algum arquivo RAW do intervalo.
+        Exception: Propaga falhas de leitura, transformação ou escrita DuckDB.
     """
 
     if start_year > end_year:
@@ -199,10 +193,18 @@ def _load_raw_dir(
     duckdb_threads: int,
     ingestion_time: datetime,
 ) -> None:
-    """
-    Executa a ingestão de um único raw_dir.
+    """Processa um arquivo RAW usando uma conexão DuckDB exclusiva do worker.
 
-    Cada worker cria sua própria conexão DuckDB.
+    Args:
+        raw_dir: Caminho do arquivo TXT a ingerir.
+        dag_run_id: Identificador da execução do pipeline.
+        output_dir: Diretório raiz da camada Bronze.
+        memory_limit: Limite DuckDB deste worker, ou ``None`` para o padrão.
+        duckdb_threads: Número de threads permitido nesta conexão.
+        ingestion_time: Timestamp lógico usado nos metadados e na partição.
+
+    Raises:
+        Exception: Propaga erros de conexão ou execução da consulta DuckDB.
     """
 
     con = None
@@ -248,6 +250,14 @@ def _load_raw_dir(
             con.close()
 
 def _validate_memory_limit(memory_limit: Optional[str]) -> None:
+    """Valida se o limite de memória tem unidade aceita e valor positivo.
+
+    Args:
+        memory_limit: Limite, como ``"2GB"``, ou ``None``.
+
+    Raises:
+        ValueError: Se a string não representar um tamanho positivo válido.
+    """
     if memory_limit is None:
         return
 
@@ -266,18 +276,18 @@ def list_bronze_dirs(
     end_year: int,
     output_dir: str = BRONZE_COTAHIST_DIR,
 ) -> list[str]:
-    """
-    Gera os caminhos esperados das partições Bronze no intervalo solicitado.
+    """Gera os caminhos das partições Bronze para um intervalo de anos.
 
-    Parâmetros
-    ----------
-    start_year / end_year:
-        Intervalo utilizado para localizar os diretórios Bronze.
+    Args:
+        start_year: Primeiro ano do intervalo.
+        end_year: Último ano do intervalo, inclusive.
+        output_dir: Diretório raiz da camada Bronze.
 
-    Retorna
-    -------
-    List[str]:
-        Caminhos esperados das partições da Camada Bronze.
+    Returns:
+        Caminhos esperados no formato Hive, um caminho por ano.
+
+    Raises:
+        ValueError: Se ``start_year`` for maior que ``end_year``.
     """
     if start_year > end_year:
         raise ValueError("start_year deve ser menor ou igual a end_year.")

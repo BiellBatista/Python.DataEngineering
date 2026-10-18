@@ -1,0 +1,1 @@
+"""Ingestão e transformação da série histórica de mercado da B3."""

@@ -1,6 +1,11 @@
+"""Deduplicação e escrita do dataset COTAHIST na camada Silver."""
+
 import logging
 import os
 import re
+import shutil
+import tempfile
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +37,7 @@ from config import (
     DUCKDB_THREADS,
     INGESTED_DATE_PARTITION_NAME,
     PARQUET_COMPRESSION,
+    PARQUET_PER_THREAD_OUTPUT,
     PARQUET_ROW_GROUP_SIZE,
     SILVER_COTAHIST_DIR,
 )
@@ -72,7 +78,9 @@ COPY_QUERY = f"""
          apenas a versão mais recente do registro.
 
     5. Escrita Otimizada na Camada Silver (COPY TO):
-       - Grava os dados em formato `PARQUET` particionado por `data_pregao`.
+       - Grava os dados em formato `PARQUET` particionado por ano.
+       - Escreve um arquivo por partição e substitui o dataset apenas após a
+         conclusão bem-sucedida da nova carga.
        - Aplica compressão `ZSTD` e define o `ROW_GROUP_SIZE` para 122.880 linhas,
          otimizando o desempenho de consultas e o data skipping.
     ===========================================================================
@@ -80,6 +88,7 @@ COPY_QUERY = f"""
     COPY (
         WITH parsed AS (
             SELECT
+                year,
                 strptime(SUBSTR(content, {B3_TRADE_DATE_START}, {B3_TRADE_DATE_LENGTH}), '{B3_TRADE_DATE_FORMAT}')::DATE AS data_pregao,
                 TRIM(SUBSTR(content, {B3_TICKER_START}, {B3_TICKER_LENGTH})) AS ticker,
                 SUBSTR(content, {B3_MARKET_TYPE_START}, {B3_MARKET_TYPE_LENGTH}) AS tipo_mercado,
@@ -95,6 +104,7 @@ COPY_QUERY = f"""
             WHERE SUBSTR(content, {B3_RECORD_TYPE_START}, {B3_RECORD_TYPE_LENGTH}) = '{B3_RECORD_TYPE_CODE}'
         )
         SELECT
+            year,
             data_pregao,
             ticker,
             tipo_mercado,
@@ -113,10 +123,11 @@ COPY_QUERY = f"""
         ) = 1
     ) TO $output_dir (
         FORMAT PARQUET,
-        PARTITION_BY (data_pregao),
+        PARTITION_BY (year),
         COMPRESSION '{PARQUET_COMPRESSION}',
         ROW_GROUP_SIZE {PARQUET_ROW_GROUP_SIZE},
-        OVERWRITE_OR_IGNORE
+        PER_THREAD_OUTPUT {str(PARQUET_PER_THREAD_OUTPUT).lower()},
+        OVERWRITE
     );
 """
 
@@ -129,12 +140,28 @@ def execute_silver_load(
     input_dir: str = BRONZE_COTAHIST_DIR,
     output_dir: str = SILVER_COTAHIST_DIR,
 ) -> None:
-    """
-    Executa a carga da camada Silver processando a partição Bronze mais recente de cada ano.
-    Processa todos os arquivos Parquet da partição Bronze mais recente de cada ano.
+    """Consolida os Parquets Bronze recentes e substitui o dataset Silver.
 
-    input_dir / output_dir:
-        Diretórios base das camadas Bronze e Silver.
+    Reúne os arquivos da partição Bronze mais recente de cada ano, aplica a
+    transformação e deduplicação, e escreve uma partição Parquet por ano.
+    A saída existente só é substituída depois que a nova escrita termina.
+
+    Args:
+        dag_run_id: Identificador da execução do pipeline, armazenado nos dados.
+        start_year: Primeiro ano a processar.
+        end_year: Último ano a processar, inclusive.
+        memory_limit: Limite de memória DuckDB, ou ``None`` para o padrão.
+        threads: Número de threads DuckDB; ``None`` usa as CPUs disponíveis.
+        input_dir: Diretório raiz de entrada da camada Bronze.
+        output_dir: Diretório raiz de saída da camada Silver.
+
+    Raises:
+        ValueError: Se os anos, threads ou limite de memória forem inválidos.
+        FileNotFoundError: Se não houver diretório ou Parquet Bronze para algum
+            ano solicitado.
+        NotADirectoryError: Se o caminho de saída existir e não for diretório.
+        Exception: Propaga falhas de leitura ou transformação. A saída Silver
+            anterior é preservada se a nova escrita não for promovida.
     """
     if start_year > end_year:
         raise ValueError("start_year deve ser menor ou igual a end_year.")
@@ -143,8 +170,14 @@ def execute_silver_load(
 
     _validate_memory_limit(memory_limit)
 
+    staging_dir: Optional[str] = None
     try:
-        ensure_directory_available(output_dir)
+        output_path = Path(output_dir)
+        ensure_directory_available(str(output_path.parent))
+        if output_path.exists() and not output_path.is_dir():
+            raise NotADirectoryError(
+                f"O destino Silver existe e não é um diretório: {output_path}"
+            )
 
         logger.info("Iniciando carga da Camada Silver...")
 
@@ -157,6 +190,26 @@ def execute_silver_load(
             )
 
         total_threads = threads if threads is not None else (os.cpu_count() or 4)
+        input_files: list[str] = []
+        for bronze_dir in bronze_dirs:
+            recent_parquets = _find_most_recent_parquets(bronze_dir)
+
+            if not recent_parquets:
+                raise FileNotFoundError(
+                    f"Nenhum arquivo Parquet encontrado em: {bronze_dir}"
+                )
+
+            logger.info(
+                "Adicionando %s arquivo(s) Bronze da partição mais recente em %s",
+                len(recent_parquets),
+                bronze_dir,
+            )
+            input_files.extend(recent_parquets)
+
+        staging_dir = tempfile.mkdtemp(
+            prefix=f".{output_path.name}.staging-",
+            dir=output_path.parent,
+        )
         con = duckdb.connect(":memory:")
 
         try:
@@ -170,40 +223,66 @@ def execute_silver_load(
                 con.execute(f"SET memory_limit = '{memory_limit}';")
 
             logger.info(f"Threads DuckDB configuradas: {total_threads}")
-
-            for bronze_dir in bronze_dirs:
-                recent_parquets = _find_most_recent_parquets(bronze_dir)
-
-                if not recent_parquets:
-                    raise FileNotFoundError(
-                        f"Nenhum arquivo Parquet encontrado em: {bronze_dir}"
-                    )
-
-                logger.info(
-                    "Processando %s arquivo(s) Bronze da partição mais recente em %s",
-                    len(recent_parquets),
-                    bronze_dir,
-                )
-                con.execute(
-                    COPY_QUERY,
-                    {
-                        "input_files": recent_parquets,
-                        "output_dir": output_dir,
-                        "dag_run_id": dag_run_id,
-                    },
-                )
+            con.execute(
+                COPY_QUERY,
+                {
+                    "input_files": input_files,
+                    "output_dir": staging_dir,
+                    "dag_run_id": dag_run_id,
+                },
+            )
         finally:
             con.close()
 
+        _promote_output_directory(Path(staging_dir), output_path)
         logger.info("✅ Carga da Camada Silver concluída com sucesso!")
 
     except Exception:
         logger.exception("❌ Erro durante a carga da Camada Silver.")
         raise
+    finally:
+        if staging_dir is not None and os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+
+
+def _promote_output_directory(staging_dir: Path, output_dir: Path) -> None:
+    """Promove a saída temporária e restaura a anterior se a promoção falhar.
+
+    Args:
+        staging_dir: Diretório temporário contendo o novo dataset completo.
+        output_dir: Diretório final do dataset Silver.
+
+    Raises:
+        OSError: Se a substituição do diretório falhar. Quando possível, a
+            versão anterior é restaurada antes de propagar o erro.
+    """
+    backup_dir = output_dir.with_name(
+        f".{output_dir.name}.backup-{uuid.uuid4().hex}"
+    )
+    had_existing_output = output_dir.exists()
+
+    try:
+        if had_existing_output:
+            os.replace(output_dir, backup_dir)
+
+        os.replace(staging_dir, output_dir)
+    except Exception:
+        if had_existing_output and backup_dir.exists() and not output_dir.exists():
+            os.replace(backup_dir, output_dir)
+        raise
+
+    if had_existing_output:
+        shutil.rmtree(backup_dir)
 
 def _find_most_recent_parquets(bronze_year_dir: str) -> list[str]:
-    """
-    Retorna todos os Parquets da partição _ingested_date mais recente.
+    """Localiza os Parquets da partição de ingestão mais recente do ano.
+
+    Args:
+        bronze_year_dir: Diretório da partição Bronze ``year=...``.
+
+    Returns:
+        Caminhos ordenados dos Parquets encontrados. Se não houver partições
+        ``_ingested_date``, procura recursivamente no diretório anual.
     """
     year_path = Path(bronze_year_dir)
     ingest_dirs = [
@@ -219,6 +298,14 @@ def _find_most_recent_parquets(bronze_year_dir: str) -> list[str]:
     return sorted(str(path) for path in latest_dir.rglob("*.parquet"))
 
 def _validate_memory_limit(memory_limit: Optional[str]) -> None:
+    """Valida se o limite de memória tem unidade aceita e valor positivo.
+
+    Args:
+        memory_limit: Limite, como ``"4GB"``, ou ``None``.
+
+    Raises:
+        ValueError: Se a string não representar um tamanho positivo válido.
+    """
     if memory_limit is None:
         return
 

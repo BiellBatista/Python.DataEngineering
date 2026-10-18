@@ -1,3 +1,5 @@
+"""Ponto de entrada para executar sequencialmente as cargas Bronze e Silver."""
+
 from datetime import datetime, timezone
 
 from config import (
@@ -14,6 +16,7 @@ from historical_series.transformations.silver import execute_silver_load
 
 
 def main() -> None:
+    """Executa as cargas Bronze e Silver com os padrões do ambiente."""
     ingestion_time = datetime.now(timezone.utc)
     dag_run_id = (
         f"{MANUAL_RUN_ID_PREFIX}-"

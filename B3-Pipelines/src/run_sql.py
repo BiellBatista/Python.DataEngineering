@@ -1,3 +1,5 @@
+"""Interface de linha de comando SQL interativa para arquivos Parquet."""
+
 import duckdb
 
 from config import BRONZE_COTAHIST_DIR, SILVER_COTAHIST_DIR
@@ -9,6 +11,16 @@ except ImportError:
     pass
 
 def start_interactive_cli(silver_dir: str = BRONZE_COTAHIST_DIR) -> None:
+    """Abre um REPL DuckDB sobre os arquivos Parquet de um diretório.
+
+    Args:
+        silver_dir: Diretório raiz contendo os arquivos Parquet a consultar.
+            O valor padrão é definido pela configuração do projeto.
+
+    Note:
+        Os atalhos ``schema``, ``count``, ``exit``, ``quit`` e ``sair`` são
+        interpretados pela interface antes de enviar SQL ao DuckDB.
+    """
     parquet_pattern = f"{silver_dir.rstrip('/')}/**/*.parquet"
     
     print("=" * 70)

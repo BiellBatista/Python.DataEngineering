@@ -22,6 +22,7 @@ from historical_series.transformations.silver import execute_silver_load
     start_date=datetime(2024, 1, 1),
     schedule=None,  # Execução manual/sob demanda
     catchup=False,
+    max_active_runs=1,
     default_args={
         "owner": "data_engineering",
         "retries": 1,
@@ -71,14 +72,19 @@ from historical_series.transformations.silver import execute_silver_load
     doc_md=__doc__,
 )
 def b3_cotahist_pipeline():
+    """Define o fluxo de ingestão Bronze seguido da transformação Silver."""
 
     @task(task_id="load_bronze_layer")
     def run_bronze_step(run_id: str, logical_date: datetime, **context: Any) -> Dict[str, Any]:
-        """
-        Executa a transformação da camada RAW (.txt posicional) para a Bronze (.parquet).
-        
-        - run_id: Identificador da execução injetado pelo Airflow.
-        - logical_date: Timestamp lógico da DAG garantindo idempotência em retentativas.
+        """Carrega os arquivos RAW na Bronze e retorna metadados leves.
+
+        Args:
+            run_id: Identificador da execução fornecido pelo Airflow.
+            logical_date: Data lógica da DAG, reutilizada em retries.
+            **context: Contexto da task, incluindo os parâmetros da DAG.
+
+        Returns:
+            Anos processados e estado da carga, apropriados para XCom.
         """
         params = context["params"]
         start_year = int(params["start_year"])
@@ -108,8 +114,12 @@ def b3_cotahist_pipeline():
 
     @task(task_id="load_silver_layer")
     def run_silver_step(bronze_metadata: Dict[str, Any], run_id: str, **context: Any) -> None:
-        """
-        Executa a deduplicação e carga da Silver a partir das partições da Bronze mais recentes.
+        """Deduplica e grava na Silver os anos informados pela task Bronze.
+
+        Args:
+            bronze_metadata: Intervalo de anos retornado pela task Bronze.
+            run_id: Identificador da execução fornecido pelo Airflow.
+            **context: Contexto da task, incluindo os parâmetros da DAG.
         """
         params = context["params"]
         start_year = bronze_metadata["start_year"]

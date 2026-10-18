@@ -1,21 +1,21 @@
+"""Utilitários para validar diretórios e pontos de montagem."""
+
 from pathlib import Path
 from typing import Union
 
+
 def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:
-    """
-    Verifica se uma ou mais unidades/pontos de montagem estão disponíveis
-    E se os diretórios especificados realmente existem no disco.
+    """Encontra caminhos ausentes ou indisponíveis no disco.
 
-    Parâmetros
-    ----------
-    directories : Union[str, list[str]]
-        Caminho(s) completo(s) do(s) diretório(s).
+    Para caminhos em Windows ou sob ``/mnt``, valida primeiro a unidade ou o
+    ponto de montagem correspondente.
 
-    Retorna
-    -------
-    list[str]
-        Lista com os diretórios inexistentes. 
-        Retorna uma lista vazia [] se todos existirem e forem acessíveis.
+    Args:
+        directories: Um caminho ou uma lista de caminhos para validar.
+
+    Returns:
+        Caminhos que não existem ou cuja unidade/ponto de montagem está
+        indisponível. Uma lista vazia indica que todos foram encontrados.
     """
     if isinstance(directories, str):
         directories = [directories]
@@ -48,20 +48,15 @@ def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:
     return missing_directories
 
 def ensure_directory_available(directory: str) -> None:
-    """
-    Verifica se a unidade/ponto de montagem está disponível
-    e garante que o diretório exista (criando-o se necessário).
+    """Valida o ponto de montagem e cria o diretório, se necessário.
 
-    Parâmetros
-    ----------
-    directory : str
-        Caminho completo do diretório.
+    Args:
+        directory: Caminho completo do diretório a preparar.
 
-    Retorna
-    -------
-    None
-        Retorna normalmente se o diretório estiver disponível. Erros de
-        montagem, permissão ou sistema são propagados ao chamador.
+    Raises:
+        FileNotFoundError: Se a unidade ou o ponto de montagem estiver ausente.
+        NotADirectoryError: Se o caminho resultante não for um diretório.
+        OSError: Se o diretório não puder ser criado ou acessado.
     """
     path = Path(directory)
 

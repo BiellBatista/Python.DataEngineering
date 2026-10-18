@@ -1,0 +1,1 @@
+"""Leitores e utilitários de ingestão dos dados históricos da B3."""

@@ -1,0 +1,1 @@
+"""Transformações das camadas Bronze e Silver da série histórica."""
