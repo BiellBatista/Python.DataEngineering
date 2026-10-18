@@ -1,6 +1,6 @@
 import duckdb
 
-from config import SILVER_COTAHIST_DIR
+from config import BRONZE_COTAHIST_DIR, SILVER_COTAHIST_DIR
 
 # Permite autocompletar e navegar no histórico com as setas do teclado (Linux/WSL)
 try:
@@ -8,11 +8,11 @@ try:
 except ImportError:
     pass
 
-def start_interactive_cli(silver_dir: str = SILVER_COTAHIST_DIR) -> None:
+def start_interactive_cli(silver_dir: str = BRONZE_COTAHIST_DIR) -> None:
     parquet_pattern = f"{silver_dir.rstrip('/')}/**/*.parquet"
     
     print("=" * 70)
-    print(" 🚀 DuckDB Interactive SQL CLI - Camada Silver B3")
+    print(" 🚀 DuckDB Interactive SQL CLI - Camada Bronze B3")
     print("=" * 70)
     print(f"📁 Lendo dados de: {parquet_pattern}")
     print("💡 View criada: 'cotacoes' (ou 'silver')")

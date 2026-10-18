@@ -211,7 +211,10 @@ def _load_raw_dir(
         logger.info(f"Iniciando processamento: {raw_dir} (DuckDB threads={duckdb_threads})")
 
         con = duckdb.connect()
-        # Reduz consumo de memória durante leitura/escrita.
+        # Desativa a ordenação estrita para permitir streaming direto de blocos para o disco pelas threads paralelas, otimizando o consumo de RAM.
+        # Ajusta as configurações internas do motor DuckDB para otimizar o uso de memória RAM e aumentar o throughput em operações de leitura e escrita paralelas.
+        #Define se o DuckDB deve manter a ordem exata de inserção dos registros lidos. Quando definido como False (recomendado para grandes cargas e pipelines ETL/ELT),
+        # desativa a sincronização de reordenação entre threads de gravação, reduzindo drasticamente o consumo de memória RAM e eliminando gargalos de processamento paralelo.
         con.execute(
             f"SET preserve_insertion_order = "
             f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
