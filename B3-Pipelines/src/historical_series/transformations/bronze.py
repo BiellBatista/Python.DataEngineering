@@ -5,10 +5,12 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import duckdb
 
+from common.exceptions import BronzeError
 from config import (
     BRONZE_COTAHIST_DIR,
     BRONZE_MAX_WORKERS,
@@ -18,6 +20,7 @@ from config import (
     DUCKDB_PRESERVE_INSERTION_ORDER,
     DUCKDB_THREADS,
     INGESTED_DATE_FORMAT,
+    INGESTED_DATE_PARTITION_NAME,
     PARQUET_COMPRESSION,
     PARQUET_ROW_GROUP_SIZE,
     RAW_COTAHIST_DIR,
@@ -25,7 +28,7 @@ from config import (
     RAW_TEXT_DELIMITER,
     RAW_TEXT_QUOTE,
 )
-from historical_series.ingestion.raw import list_raw_dirs
+from historical_series.ingestions.raw import list_raw_dirs
 from utils.helpers import ensure_directory_available
 
 logger = logging.getLogger(__name__)
@@ -141,7 +144,7 @@ def execute_bronze_load(
         raw_dirs = list_raw_dirs(start_year, end_year, input_dir)
 
         if not raw_dirs:
-            raise FileNotFoundError("Nenhum arquivo RAW encontrado para processar.")
+            raise BronzeError("Nenhum arquivo RAW encontrado para processar.")
 
         total_threads = threads if threads is not None else (os.cpu_count() or 1)
         worker_limit = max_workers if max_workers is not None else BRONZE_MAX_WORKERS
@@ -299,3 +302,27 @@ def list_bronze_dirs(
         )
         for year in range(start_year, end_year + 1)
     ]
+
+
+def find_most_recent_bronze_parquets(bronze_year_dir: str) -> list[str]:
+    """Localiza os Parquets da ingestão mais recente de uma partição anual.
+
+    Args:
+        bronze_year_dir: Diretório da partição Bronze ``year=...``.
+
+    Returns:
+        Caminhos ordenados dos arquivos Parquet encontrados. Se não houver
+        subdiretórios ``_ingested_date``, procura recursivamente no diretório.
+    """
+    year_path = Path(bronze_year_dir)
+    ingest_dirs = [
+        directory
+        for directory in year_path.glob(f"{INGESTED_DATE_PARTITION_NAME}=*")
+        if directory.is_dir()
+    ]
+
+    if not ingest_dirs:
+        return sorted(str(path) for path in year_path.rglob("*.parquet"))
+
+    latest_dir = max(ingest_dirs, key=lambda directory: directory.name)
+    return sorted(str(path) for path in latest_dir.rglob("*.parquet"))

@@ -11,6 +11,7 @@ from typing import Optional
 
 import duckdb
 
+from common.exceptions import BronzeError, SilverError
 from config import (
     B3_CLOSE_PRICE_START,
     B3_DECIMAL_SCALE,
@@ -35,13 +36,15 @@ from config import (
     DUCKDB_MEMORY_LIMIT_PATTERN,
     DUCKDB_PRESERVE_INSERTION_ORDER,
     DUCKDB_THREADS,
-    INGESTED_DATE_PARTITION_NAME,
     PARQUET_COMPRESSION,
     PARQUET_PER_THREAD_OUTPUT,
     PARQUET_ROW_GROUP_SIZE,
     SILVER_COTAHIST_DIR,
 )
-from historical_series.transformations.bronze import list_bronze_dirs
+from historical_series.transformations.bronze import (
+    find_most_recent_bronze_parquets,
+    list_bronze_dirs,
+)
 from utils.helpers import check_directories_exist, ensure_directory_available
 
 logger = logging.getLogger(__name__)
@@ -159,7 +162,8 @@ def execute_silver_load(
         ValueError: Se os anos, threads ou limite de memória forem inválidos.
         FileNotFoundError: Se não houver diretório ou Parquet Bronze para algum
             ano solicitado.
-        NotADirectoryError: Se o caminho de saída existir e não for diretório.
+        BronzeError: Se não houver diretórios ou arquivos Parquet Bronze.
+        SilverError: Se o caminho de saída existir e não for diretório.
         Exception: Propaga falhas de leitura ou transformação. A saída Silver
             anterior é preservada se a nova escrita não for promovida.
     """
@@ -175,7 +179,7 @@ def execute_silver_load(
         output_path = Path(output_dir)
         ensure_directory_available(str(output_path.parent))
         if output_path.exists() and not output_path.is_dir():
-            raise NotADirectoryError(
+            raise SilverError(
                 f"O destino Silver existe e não é um diretório: {output_path}"
             )
 
@@ -185,17 +189,17 @@ def execute_silver_load(
         missing_dirs = check_directories_exist(bronze_dirs)
         
         if missing_dirs:
-            raise FileNotFoundError(
+            raise BronzeError(
                 f"Diretórios Bronze inexistentes: {', '.join(missing_dirs)}"
             )
 
         total_threads = threads if threads is not None else (os.cpu_count() or 4)
         input_files: list[str] = []
         for bronze_dir in bronze_dirs:
-            recent_parquets = _find_most_recent_parquets(bronze_dir)
+            recent_parquets = find_most_recent_bronze_parquets(bronze_dir)
 
             if not recent_parquets:
-                raise FileNotFoundError(
+                raise BronzeError(
                     f"Nenhum arquivo Parquet encontrado em: {bronze_dir}"
                 )
 
@@ -273,29 +277,6 @@ def _promote_output_directory(staging_dir: Path, output_dir: Path) -> None:
 
     if had_existing_output:
         shutil.rmtree(backup_dir)
-
-def _find_most_recent_parquets(bronze_year_dir: str) -> list[str]:
-    """Localiza os Parquets da partição de ingestão mais recente do ano.
-
-    Args:
-        bronze_year_dir: Diretório da partição Bronze ``year=...``.
-
-    Returns:
-        Caminhos ordenados dos Parquets encontrados. Se não houver partições
-        ``_ingested_date``, procura recursivamente no diretório anual.
-    """
-    year_path = Path(bronze_year_dir)
-    ingest_dirs = [
-        d
-        for d in year_path.glob(f"{INGESTED_DATE_PARTITION_NAME}=*")
-        if d.is_dir()
-    ]
-
-    if not ingest_dirs:
-        return sorted(str(path) for path in year_path.rglob("*.parquet"))
-
-    latest_dir = max(ingest_dirs, key=lambda d: d.name)
-    return sorted(str(path) for path in latest_dir.rglob("*.parquet"))
 
 def _validate_memory_limit(memory_limit: Optional[str]) -> None:
     """Valida se o limite de memória tem unidade aceita e valor positivo.

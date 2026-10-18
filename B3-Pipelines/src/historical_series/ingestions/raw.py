@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Union
 
 from config import RAW_COTAHIST_DIR, RAW_FILENAME_TEMPLATE, RAW_YEAR_DIRECTORY_TEMPLATE
+from common.exceptions import RawError
 
 
 def get_raw_dir(year: int, base_dir: Union[str, Path] = RAW_COTAHIST_DIR) -> str:
@@ -40,7 +41,7 @@ def list_raw_dirs(
 
     Raises:
         ValueError: Se ``start_year`` for maior que ``end_year``.
-        FileNotFoundError: Se faltar algum arquivo do intervalo solicitado.
+        RawError: Se faltar algum arquivo do intervalo solicitado.
     """
     if start_year > end_year:
         raise ValueError("start_year deve ser menor ou igual a end_year.")
@@ -52,7 +53,7 @@ def list_raw_dirs(
     missing_files = [raw_dir for raw_dir in raw_dirs if not Path(raw_dir).is_file()]
 
     if missing_files:
-        raise FileNotFoundError(
+        raise RawError(
             "Arquivos RAW ausentes para o intervalo solicitado: "
             + ", ".join(missing_files)
         )

@@ -1,11 +1,16 @@
-"""
-DAG de Orquestração do Pipeline ELT da Série Histórica da B3 (COTAHIST)
-Arquitetura Medalhão: RAW -> Bronze -> Silver com DuckDB e Python.
+"""DAG ELT da B3 com Data Quality entre as camadas do pipeline.
+
+Valida a largura de 245 bytes e os tipos de registro do RAW definidos no
+manual oficial COTAHIST, valida chaves e preços na Bronze e só então carrega
+a Silver. O preço chamado fechamento pelo pipeline usa o campo PREULT do
+manual (preço do último negócio do pregão). Consulte o
+`layout oficial da B3 <https://www.b3.com.br/data/files/C8/F3/08/B4/297BE410F816C9E492D828A8/SeriesHistoricas_Layout.pdf>`_.
 """
 
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from airflow.sdk import dag, task, Param
+from airflow.sdk.exceptions import AirflowFailException
 
 from config import (
     BRONZE_MAX_WORKERS,
@@ -13,6 +18,11 @@ from config import (
     DEFAULT_START_YEAR,
     DUCKDB_MEMORY_LIMIT,
     DUCKDB_THREADS,
+)
+from historical_series.data_qualities import (
+    DataQualityError,
+    validate_bronze_quality,
+    validate_raw_quality,
 )
 from historical_series.transformations.bronze import execute_bronze_load
 from historical_series.transformations.silver import execute_silver_load
@@ -72,13 +82,44 @@ from historical_series.transformations.silver import execute_silver_load
     doc_md=__doc__,
 )
 def b3_cotahist_pipeline():
-    """Define o fluxo de ingestão Bronze seguido da transformação Silver."""
+    """Define validações de qualidade entre RAW, Bronze e Silver."""
+
+    @task(task_id="validate_raw_data_quality")
+    def check_raw_step(**context: Any) -> Dict[str, Any]:
+        """Valida os arquivos RAW antes de permitir a carga Bronze.
+
+        Args:
+            **context: Contexto da task, incluindo os parâmetros da DAG.
+
+        Returns:
+            Intervalo de anos validado, para a carga Bronze subsequente.
+        """
+        params = context["params"]
+        start_year = int(params["start_year"])
+        end_year = int(params["end_year"])
+
+        print(
+            f"Validando arquivos RAW para o período: "
+            f"{start_year} a {end_year}"
+        )
+        try:
+            validate_raw_quality(start_year=start_year, end_year=end_year)
+        except DataQualityError as exc:
+            raise AirflowFailException(str(exc)) from exc
+        print("Data Quality RAW aprovada.")
+        return {"start_year": start_year, "end_year": end_year}
 
     @task(task_id="load_bronze_layer")
-    def run_bronze_step(run_id: str, logical_date: datetime, **context: Any) -> Dict[str, Any]:
+    def run_bronze_step(
+        raw_metadata: Dict[str, Any],
+        run_id: str,
+        logical_date: datetime,
+        **context: Any,
+    ) -> Dict[str, Any]:
         """Carrega os arquivos RAW na Bronze e retorna metadados leves.
 
         Args:
+            raw_metadata: Intervalo validado pela task de qualidade RAW.
             run_id: Identificador da execução fornecido pelo Airflow.
             logical_date: Data lógica da DAG, reutilizada em retries.
             **context: Contexto da task, incluindo os parâmetros da DAG.
@@ -87,8 +128,8 @@ def b3_cotahist_pipeline():
             Anos processados e estado da carga, apropriados para XCom.
         """
         params = context["params"]
-        start_year = int(params["start_year"])
-        end_year = int(params["end_year"])
+        start_year = raw_metadata["start_year"]
+        end_year = raw_metadata["end_year"]
         memory_limit = str(params["memory_limit"])
         threads = int(params["threads"])
         max_workers = int(params["max_workers"])
@@ -111,6 +152,40 @@ def b3_cotahist_pipeline():
             "end_year": end_year,
             "status": "bronze_completed",
         }
+
+    @task(task_id="validate_bronze_data_quality")
+    def check_bronze_step(
+        bronze_metadata: Dict[str, Any],
+        **context: Any,
+    ) -> Dict[str, Any]:
+        """Valida os registros Bronze antes de permitir a carga Silver.
+
+        Args:
+            bronze_metadata: Intervalo de anos carregado na Bronze.
+            **context: Contexto da task, incluindo os parâmetros da DAG.
+
+        Returns:
+            Os metadados, após a aprovação das regras de qualidade.
+        """
+        params = context["params"]
+        start_year = bronze_metadata["start_year"]
+        end_year = bronze_metadata["end_year"]
+
+        print(
+            f"Validando dados Bronze para o período: "
+            f"{start_year} a {end_year}"
+        )
+        try:
+            validate_bronze_quality(
+                start_year=start_year,
+                end_year=end_year,
+                memory_limit=str(params["memory_limit"]),
+                threads=int(params["threads"]),
+            )
+        except DataQualityError as exc:
+            raise AirflowFailException(str(exc)) from exc
+        print("Data Quality Bronze aprovada.")
+        return bronze_metadata
 
     @task(task_id="load_silver_layer")
     def run_silver_step(bronze_metadata: Dict[str, Any], run_id: str, **context: Any) -> None:
@@ -139,9 +214,10 @@ def b3_cotahist_pipeline():
 
         print(f"[{run_id}] Carga da camada Silver concluída com sucesso.")
 
-    # Dependência declarativa TaskFlow: a Silver consome o retorno leve da Bronze
-    bronze_output = run_bronze_step()
-    run_silver_step(bronze_metadata=bronze_output)
+    raw_metadata = check_raw_step()
+    bronze_output = run_bronze_step(raw_metadata=raw_metadata)
+    validated_bronze = check_bronze_step(bronze_metadata=bronze_output)
+    run_silver_step(bronze_metadata=validated_bronze)
 
 
 # Instanciação da DAG no escopo do módulo

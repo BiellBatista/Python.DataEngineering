@@ -21,7 +21,7 @@ py-modules = ["config", "main", "run_sql"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["historical_series*", "utils*"]
+include = ["common*", "historical_series*", "utils*"]
 
 [tool.pyright]
 extraPaths = ["src"]
