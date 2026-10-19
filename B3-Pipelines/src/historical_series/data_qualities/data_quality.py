@@ -10,8 +10,11 @@ from common.exceptions import BronzeError, DataQualityError
 from config import (
     B3_CLOSE_PRICE_START,
     B3_DECIMAL_SCALE,
+    B3_FRACTIONAL_MARKET_TYPE,
     B3_HIGH_PRICE_START,
     B3_LOW_PRICE_START,
+    B3_MARKET_TYPE_LENGTH,
+    B3_MARKET_TYPE_START,
     B3_OPEN_PRICE_START,
     B3_PRICE_LENGTH,
     B3_RECORD_LENGTH,
@@ -134,6 +137,10 @@ def validate_bronze_quality(
     correspondendo exatamente ao conjunto consumido pela transformação Silver.
     O campo de preço chamado ``preco_fechamento`` no pipeline corresponde ao
     ``PREULT`` do layout da B3, isto é, o preço do último negócio do pregão.
+    Nos Parquets analisados, os registros do mercado fracionário (tipo ``020``)
+    podem ter os quatro campos de preço zerados mesmo havendo negócios. Esse
+    padrão é tratado como preço não informado; outras inconsistências continuam
+    sendo validadas.
 
     Args:
         start_year: Primeiro ano do intervalo, inclusive.
@@ -208,6 +215,9 @@ def _validate_bronze_quality(
             f"""
             WITH parsed AS (
                 SELECT
+                    SUBSTR(
+                        content, {B3_MARKET_TYPE_START}, {B3_MARKET_TYPE_LENGTH}
+                    ) AS tipo_mercado,
                     try_strptime(
                         SUBSTR(content, {B3_TRADE_DATE_START}, {B3_TRADE_DATE_LENGTH}),
                         '{B3_TRADE_DATE_FORMAT}'
@@ -243,11 +253,28 @@ def _validate_bronze_quality(
                     WHERE data_pregao IS NULL OR ticker IS NULL
                 ) AS invalid_keys,
                 COUNT(*) FILTER (
-                    WHERE preco_abertura IS NULL OR preco_abertura <= 0
-                       OR preco_maximo IS NULL OR preco_maximo <= 0
-                       OR preco_minimo IS NULL OR preco_minimo <= 0
-                       OR preco_fechamento IS NULL OR preco_fechamento <= 0
+                    WHERE NOT COALESCE(
+                        tipo_mercado = '{B3_FRACTIONAL_MARKET_TYPE}'
+                        AND preco_abertura = 0
+                        AND preco_maximo = 0
+                        AND preco_minimo = 0
+                        AND preco_fechamento = 0,
+                        FALSE
+                    )
+                    AND (
+                        preco_abertura IS NULL OR preco_abertura <= 0
+                        OR preco_maximo IS NULL OR preco_maximo <= 0
+                        OR preco_minimo IS NULL OR preco_minimo <= 0
+                        OR preco_fechamento IS NULL OR preco_fechamento <= 0
+                    )
                 ) AS invalid_prices,
+                COUNT(*) FILTER (
+                    WHERE tipo_mercado = '{B3_FRACTIONAL_MARKET_TYPE}'
+                      AND preco_abertura = 0
+                      AND preco_maximo = 0
+                      AND preco_minimo = 0
+                      AND preco_fechamento = 0
+                ) AS unpriced_fractional_records,
                 COUNT(*) FILTER (
                     WHERE preco_maximo IS NOT NULL
                       AND preco_minimo IS NOT NULL
@@ -263,13 +290,21 @@ def _validate_bronze_quality(
     if counts is None:
         raise RuntimeError("Data Quality Bronze: DuckDB não retornou resultados.")
 
-    total, invalid_keys, invalid_prices, invalid_price_ranges = counts
-    logger.info(
-        "Resultado DQ Bronze: registros=%s, chaves_invalidas=%s, "
-        "precos_invalidos=%s, faixas_invalidas=%s.",
+    (
         total,
         invalid_keys,
         invalid_prices,
+        unpriced_fractional_records,
+        invalid_price_ranges,
+    ) = counts
+    logger.info(
+        "Resultado DQ Bronze: registros=%s, chaves_invalidas=%s, "
+        "precos_invalidos=%s, registros_fracionarios_sem_preco=%s, "
+        "faixas_invalidas=%s.",
+        total,
+        invalid_keys,
+        invalid_prices,
+        unpriced_fractional_records,
         invalid_price_ranges,
     )
     failures = []

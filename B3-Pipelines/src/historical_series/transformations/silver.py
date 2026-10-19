@@ -143,11 +143,13 @@ def execute_silver_load(
     input_dir: str = BRONZE_COTAHIST_DIR,
     output_dir: str = SILVER_COTAHIST_DIR,
 ) -> None:
-    """Consolida os Parquets Bronze recentes e substitui o dataset Silver.
+    """Consolida os Parquets Bronze e substitui as partições anuais processadas.
 
-    Reúne os arquivos da partição Bronze mais recente de cada ano, aplica a
-    transformação e deduplicação, e escreve uma partição Parquet por ano.
-    A saída existente só é substituída depois que a nova escrita termina.
+    Processa cada ano isoladamente: lê a ingestão Bronze mais recente, aplica
+    transformação e deduplicação, grava em staging e promove somente a
+    partição ``year=AAAA`` daquele ano. Outras partições Silver são preservadas.
+    Se um ano falhar, os anos já promovidos permanecem atualizados e os demais
+    ainda não processados não são alterados.
 
     Args:
         dag_run_id: Identificador da execução do pipeline, armazenado nos dados.
@@ -160,12 +162,10 @@ def execute_silver_load(
 
     Raises:
         ValueError: Se os anos, threads ou limite de memória forem inválidos.
-        FileNotFoundError: Se não houver diretório ou Parquet Bronze para algum
-            ano solicitado.
         BronzeError: Se não houver diretórios ou arquivos Parquet Bronze.
         SilverError: Se o caminho de saída existir e não for diretório.
-        Exception: Propaga falhas de leitura ou transformação. A saída Silver
-            anterior é preservada se a nova escrita não for promovida.
+        Exception: Propaga falhas de leitura ou transformação. A partição Silver
+            anterior do ano corrente é preservada se a nova escrita falhar.
     """
     if start_year > end_year:
         raise ValueError("start_year deve ser menor ou igual a end_year.")
@@ -174,7 +174,6 @@ def execute_silver_load(
 
     _validate_memory_limit(memory_limit)
 
-    staging_dir: Optional[str] = None
     try:
         output_path = Path(output_dir)
         ensure_directory_available(str(output_path.parent))
@@ -182,6 +181,7 @@ def execute_silver_load(
             raise SilverError(
                 f"O destino Silver existe e não é um diretório: {output_path}"
             )
+        ensure_directory_available(str(output_path))
 
         logger.info("Iniciando carga da Camada Silver...")
 
@@ -194,7 +194,6 @@ def execute_silver_load(
             )
 
         total_threads = threads if threads is not None else (os.cpu_count() or 4)
-        input_files: list[str] = []
         for bronze_dir in bronze_dirs:
             recent_parquets = find_most_recent_bronze_parquets(bronze_dir)
 
@@ -204,49 +203,67 @@ def execute_silver_load(
                 )
 
             logger.info(
-                "Adicionando %s arquivo(s) Bronze da partição mais recente em %s",
+                "Processando %s arquivo(s) Bronze da partição mais recente em %s",
                 len(recent_parquets),
                 bronze_dir,
             )
-            input_files.extend(recent_parquets)
-
-        staging_dir = tempfile.mkdtemp(
-            prefix=f".{output_path.name}.staging-",
-            dir=output_path.parent,
-        )
-        con = duckdb.connect(":memory:")
-
-        try:
-            con.execute(
-                f"SET preserve_insertion_order = "
-                f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
+            staging_dir = tempfile.mkdtemp(
+                prefix=f".{output_path.name}.staging-",
+                dir=output_path,
             )
-            con.execute(f"SET threads = {total_threads};")
+            try:
+                con = duckdb.connect(":memory:")
+                try:
+                    con.execute(
+                        f"SET preserve_insertion_order = "
+                        f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
+                    )
+                    con.execute(f"SET threads = {total_threads};")
 
-            if memory_limit:
-                con.execute(f"SET memory_limit = '{memory_limit}';")
+                    if memory_limit:
+                        con.execute(f"SET memory_limit = '{memory_limit}';")
 
-            logger.info(f"Threads DuckDB configuradas: {total_threads}")
-            con.execute(
-                COPY_QUERY,
-                {
-                    "input_files": input_files,
-                    "output_dir": staging_dir,
-                    "dag_run_id": dag_run_id,
-                },
-            )
-        finally:
-            con.close()
+                    logger.info(
+                        "Threads DuckDB configuradas: %s; ano=%s",
+                        total_threads,
+                        Path(bronze_dir).name,
+                    )
+                    con.execute(
+                        COPY_QUERY,
+                        {
+                            "input_files": recent_parquets,
+                            "output_dir": staging_dir,
+                            "dag_run_id": dag_run_id,
+                        },
+                    )
+                finally:
+                    con.close()
 
-        _promote_output_directory(Path(staging_dir), output_path)
+                year_partition = Path(bronze_dir).name
+                staged_partition = Path(staging_dir) / year_partition
+                if not staged_partition.is_dir():
+                    raise SilverError(
+                        "A transformação Silver não gerou a partição esperada: "
+                        f"{staged_partition}"
+                    )
+
+                _promote_output_directory(
+                    staged_partition,
+                    output_path / year_partition,
+                )
+                logger.info(
+                    "Partição Silver %s atualizada com sucesso.",
+                    year_partition,
+                )
+            finally:
+                if os.path.exists(staging_dir):
+                    shutil.rmtree(staging_dir)
+
         logger.info("✅ Carga da Camada Silver concluída com sucesso!")
 
     except Exception:
         logger.exception("❌ Erro durante a carga da Camada Silver.")
         raise
-    finally:
-        if staging_dir is not None and os.path.exists(staging_dir):
-            shutil.rmtree(staging_dir)
 
 
 def _promote_output_directory(staging_dir: Path, output_dir: Path) -> None:

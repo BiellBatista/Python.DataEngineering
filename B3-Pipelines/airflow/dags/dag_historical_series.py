@@ -1,15 +1,16 @@
 """DAG ELT da B3 com Data Quality entre as camadas do pipeline.
 
-Valida a largura de 245 bytes e os tipos de registro do RAW definidos no
-manual oficial COTAHIST, valida chaves e preços na Bronze e só então carrega
-a Silver. O preço chamado fechamento pelo pipeline usa o campo PREULT do
-manual (preço do último negócio do pregão). Consulte o
+Para cada ano do intervalo, valida o RAW, carrega Bronze, valida regras de
+negócio e atualiza somente a partição Silver daquele ano. Uma falha num ano
+não impede a execução independente dos outros. A validação de RAW verifica
+largura de 245 bytes e tipos de registro conforme o manual COTAHIST; o preço
+chamado fechamento pelo pipeline usa o campo PREULT (último negócio). Consulte o
 `layout oficial da B3 <https://www.b3.com.br/data/files/C8/F3/08/B4/297BE410F816C9E492D828A8/SeriesHistoricas_Layout.pdf>`_.
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, Any
-from airflow.sdk import dag, task, Param
+from typing import Any
+from airflow.sdk import dag, task, task_group, Param
 from airflow.sdk.exceptions import AirflowFailException
 
 from config import (
@@ -33,6 +34,7 @@ from historical_series.transformations.silver import execute_silver_load
     schedule=None,  # Execução manual/sob demanda
     catchup=False,
     max_active_runs=1,
+    max_active_tasks=BRONZE_MAX_WORKERS,
     default_args={
         "owner": "data_engineering",
         "retries": 1,
@@ -69,155 +71,107 @@ from historical_series.transformations.silver import execute_silver_load
             title="Threads DuckDB",
             description="Quantidade de threads DuckDB utilizadas em cada worker.",
         ),
-        "max_workers": Param(
-            BRONZE_MAX_WORKERS,
-            type="integer",
-            minimum=1,
-            maximum=16,
-            title="Workers Simultâneos",
-            description="Quantidade de anos/diretórios processados em paralelo.",
-        ),
     },
     tags=["b3", "market_data", "duckdb", "medallion", "cotahist"],
     doc_md=__doc__,
 )
 def b3_cotahist_pipeline():
-    """Define validações de qualidade entre RAW, Bronze e Silver."""
+    """Define o processamento independente por ano e suas barreiras DQ."""
 
-    @task(task_id="validate_raw_data_quality")
-    def check_raw_step(**context: Any) -> Dict[str, Any]:
-        """Valida os arquivos RAW antes de permitir a carga Bronze.
+    @task
+    def get_years_to_process(**context: Any) -> list[int]:
+        """Retorna os anos do intervalo solicitado para mapeamento dinâmico.
 
         Args:
             **context: Contexto da task, incluindo os parâmetros da DAG.
 
         Returns:
-            Intervalo de anos validado, para a carga Bronze subsequente.
+            Anos a serem processados independentemente.
         """
         params = context["params"]
         start_year = int(params["start_year"])
         end_year = int(params["end_year"])
+        if start_year > end_year:
+            raise ValueError("start_year deve ser menor ou igual a end_year.")
+        years = list(range(start_year, end_year + 1))
+        print(f"Anos agendados para processamento independente: {years}")
+        return years
 
-        print(
-            f"Validando arquivos RAW para o período: "
-            f"{start_year} a {end_year}"
-        )
-        try:
-            validate_raw_quality(start_year=start_year, end_year=end_year)
-        except DataQualityError as exc:
-            raise AirflowFailException(str(exc)) from exc
-        print("Data Quality RAW aprovada.")
-        return {"start_year": start_year, "end_year": end_year}
+    @task_group(group_id="process_year")
+    def process_year(year: int) -> None:
+        """Executa as etapas do pipeline isoladas para um ano."""
 
-    @task(task_id="load_bronze_layer")
-    def run_bronze_step(
-        raw_metadata: Dict[str, Any],
-        run_id: str,
-        logical_date: datetime,
-        **context: Any,
-    ) -> Dict[str, Any]:
-        """Carrega os arquivos RAW na Bronze e retorna metadados leves.
+        @task(task_id="validate_raw_data_quality")
+        def check_raw_step(year: int) -> int:
+            """Valida o RAW do ano antes de permitir a carga Bronze."""
+            print(f"[{year}] Validando arquivo RAW.")
+            try:
+                validate_raw_quality(start_year=year, end_year=year)
+            except DataQualityError as exc:
+                raise AirflowFailException(str(exc)) from exc
+            print(f"[{year}] Data Quality RAW aprovada.")
+            return year
 
-        Args:
-            raw_metadata: Intervalo validado pela task de qualidade RAW.
-            run_id: Identificador da execução fornecido pelo Airflow.
-            logical_date: Data lógica da DAG, reutilizada em retries.
-            **context: Contexto da task, incluindo os parâmetros da DAG.
+        @task(task_id="load_bronze_layer")
+        def run_bronze_step(
+            year: int,
+            run_id: str,
+            logical_date: datetime,
+            **context: Any,
+        ) -> int:
+            """Carrega na Bronze somente o RAW do ano validado."""
+            params = context["params"]
+            print(f"[{year}] Iniciando carga Bronze.")
+            execute_bronze_load(
+                dag_run_id=run_id,
+                start_year=year,
+                end_year=year,
+                memory_limit=str(params["memory_limit"]),
+                threads=int(params["threads"]),
+                max_workers=1,
+                ingestion_time=logical_date,
+            )
+            print(f"[{year}] Carga Bronze concluída.")
+            return year
 
-        Returns:
-            Anos processados e estado da carga, apropriados para XCom.
-        """
-        params = context["params"]
-        start_year = raw_metadata["start_year"]
-        end_year = raw_metadata["end_year"]
-        memory_limit = str(params["memory_limit"])
-        threads = int(params["threads"])
-        max_workers = int(params["max_workers"])
+        @task(task_id="validate_bronze_data_quality")
+        def check_bronze_step(year: int, **context: Any) -> int:
+            """Valida na Bronze as regras de qualidade para o ano."""
+            params = context["params"]
+            print(f"[{year}] Validando dados Bronze.")
+            try:
+                validate_bronze_quality(
+                    start_year=year,
+                    end_year=year,
+                    memory_limit=str(params["memory_limit"]),
+                    threads=int(params["threads"]),
+                )
+            except DataQualityError as exc:
+                raise AirflowFailException(str(exc)) from exc
+            print(f"[{year}] Data Quality Bronze aprovada.")
+            return year
 
-        print(f"[{run_id}] Iniciando Carga Bronze para o período: {start_year} a {end_year}")
-
-        execute_bronze_load(
-            dag_run_id=run_id,
-            start_year=start_year,
-            end_year=end_year,
-            memory_limit=memory_limit,
-            threads=threads,
-            max_workers=max_workers,
-            ingestion_time=logical_date,  # Mantém a partição estável em retries
-        )
-
-        # Retorno de metadados leves para o XCom
-        return {
-            "start_year": start_year,
-            "end_year": end_year,
-            "status": "bronze_completed",
-        }
-
-    @task(task_id="validate_bronze_data_quality")
-    def check_bronze_step(
-        bronze_metadata: Dict[str, Any],
-        **context: Any,
-    ) -> Dict[str, Any]:
-        """Valida os registros Bronze antes de permitir a carga Silver.
-
-        Args:
-            bronze_metadata: Intervalo de anos carregado na Bronze.
-            **context: Contexto da task, incluindo os parâmetros da DAG.
-
-        Returns:
-            Os metadados, após a aprovação das regras de qualidade.
-        """
-        params = context["params"]
-        start_year = bronze_metadata["start_year"]
-        end_year = bronze_metadata["end_year"]
-
-        print(
-            f"Validando dados Bronze para o período: "
-            f"{start_year} a {end_year}"
-        )
-        try:
-            validate_bronze_quality(
-                start_year=start_year,
-                end_year=end_year,
+        @task(task_id="load_silver_layer")
+        def run_silver_step(year: int, run_id: str, **context: Any) -> None:
+            """Atualiza apenas a partição Silver do ano aprovado."""
+            params = context["params"]
+            print(f"[{year}] Iniciando carga Silver.")
+            execute_silver_load(
+                dag_run_id=run_id,
+                start_year=year,
+                end_year=year,
                 memory_limit=str(params["memory_limit"]),
                 threads=int(params["threads"]),
             )
-        except DataQualityError as exc:
-            raise AirflowFailException(str(exc)) from exc
-        print("Data Quality Bronze aprovada.")
-        return bronze_metadata
+            print(f"[{year}] Carga Silver concluída.")
 
-    @task(task_id="load_silver_layer")
-    def run_silver_step(bronze_metadata: Dict[str, Any], run_id: str, **context: Any) -> None:
-        """Deduplica e grava na Silver os anos informados pela task Bronze.
+        raw_year = check_raw_step(year)
+        bronze_year = run_bronze_step(raw_year)
+        quality_year = check_bronze_step(bronze_year)
+        run_silver_step(quality_year)
 
-        Args:
-            bronze_metadata: Intervalo de anos retornado pela task Bronze.
-            run_id: Identificador da execução fornecido pelo Airflow.
-            **context: Contexto da task, incluindo os parâmetros da DAG.
-        """
-        params = context["params"]
-        start_year = bronze_metadata["start_year"]
-        end_year = bronze_metadata["end_year"]
-        memory_limit = str(params["memory_limit"])
-        threads = int(params["threads"])
-
-        print(f"[{run_id}] Iniciando Carga Silver para o período: {start_year} a {end_year}")
-
-        execute_silver_load(
-            dag_run_id=run_id,
-            start_year=start_year,
-            end_year=end_year,
-            memory_limit=memory_limit,
-            threads=threads,
-        )
-
-        print(f"[{run_id}] Carga da camada Silver concluída com sucesso.")
-
-    raw_metadata = check_raw_step()
-    bronze_output = run_bronze_step(raw_metadata=raw_metadata)
-    validated_bronze = check_bronze_step(bronze_metadata=bronze_output)
-    run_silver_step(bronze_metadata=validated_bronze)
+    years = get_years_to_process()
+    process_year.expand(year=years)
 
 
 # Instanciação da DAG no escopo do módulo
@@ -232,6 +186,5 @@ if __name__ == "__main__":
             "end_year": DEFAULT_END_YEAR,
             "memory_limit": DUCKDB_MEMORY_LIMIT,
             "threads": DUCKDB_THREADS,
-            "max_workers": BRONZE_MAX_WORKERS,
         }
     )
