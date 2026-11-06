@@ -327,6 +327,9 @@ python -m compileall -q src airflow/dags duckdb-server
 - A análise das decisões, diferenças entre a arquitetura anterior e a atual,
   relação com os recursos do DuckDB 2.0, validações e limites de performance
   está em [DuckDB Server e DuckDB 2.0](./docs/duckdb-server-2.0.md).
+- As hipóteses priorizadas para a próxima rodada de performance, com
+  experimentos, métricas e critérios de decisão, estão em
+  [Hipóteses de melhorias futuras](./docs/hipoteses-melhorias-performance.md).
 - `.env` contém credenciais locais e está ignorado pelo Git; não publique seus
   valores.
 - Quack usa token e tráfego sem TLS apenas na rede privada do Compose. A porta
