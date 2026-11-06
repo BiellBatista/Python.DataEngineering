@@ -62,14 +62,20 @@ from historical_series.transformations.silver import execute_silver_load
             DUCKDB_MEMORY_LIMIT,
             type="string",
             title="Limite de Memória DuckDB",
-            description="Limite de memória RAM por worker DuckDB (ex: '2GB', '4GB').",
+            description=(
+                "Limite global da instância DuckDB. Em Docker, deve corresponder "
+                "a DUCKDB_MEMORY_LIMIT no .env."
+            ),
         ),
         "threads": Param(
             DUCKDB_THREADS,
             type="integer",
             minimum=1,
             title="Threads DuckDB",
-            description="Quantidade de threads DuckDB utilizadas em cada worker.",
+            description=(
+                "Limite global de threads da instância DuckDB. Em Docker, deve "
+                "corresponder a DUCKDB_THREADS no .env."
+            ),
         ),
     },
     tags=["b3", "market_data", "duckdb", "medallion", "cotahist"],

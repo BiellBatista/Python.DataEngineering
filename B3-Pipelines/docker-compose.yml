@@ -1,0 +1,128 @@
+x-airflow-environment: &airflow-environment
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}@postgres/airflow
+  B3_DATA_LAKE_ROOT: /data-lake
+  DUCKDB_HOST: duckdb-server
+  DUCKDB_PORT: ${DUCKDB_PORT:-9494}
+  QUACK_TOKEN: ${QUACK_TOKEN:?Set QUACK_TOKEN in .env}
+  PYTHONPATH: /opt/airflow/src
+
+x-airflow-common: &airflow-common
+  image: b3-airflow:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment: *airflow-environment
+  user: "${AIRFLOW_UID:-50000}:0"
+  volumes:
+    - ${B3_DATA_LAKE_ROOT:?Set B3_DATA_LAKE_ROOT in .env}:/data-lake
+    - ./airflow/dags:/opt/airflow/dags
+  networks:
+    - airflow_network
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - airflow_network
+    restart: unless-stopped
+
+  duckdb-server:
+    image: b3-duckdb-server:local
+    build:
+      context: .
+      dockerfile: duckdb-server/Dockerfile
+    environment:
+      DUCKDB_HOST: 0.0.0.0
+      DUCKDB_PORT: ${DUCKDB_PORT:-9494}
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-8GB}
+      DUCKDB_THREADS: ${DUCKDB_THREADS:-4}
+      QUACK_TOKEN: ${QUACK_TOKEN:?Set QUACK_TOKEN in .env}
+    user: "${AIRFLOW_UID:-50000}:0"
+    volumes:
+      - ${B3_DATA_LAKE_ROOT:?Set B3_DATA_LAKE_ROOT in .env}:/data-lake
+    expose:
+      - "${DUCKDB_PORT:-9494}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,socket; s=socket.create_connection(('127.0.0.1', int(os.environ['DUCKDB_PORT'])), timeout=2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - airflow_network
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    restart: "no"
+    environment:
+      <<: *airflow-environment
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Set AIRFLOW_ADMIN_PASSWORD in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      duckdb-server:
+        condition: service_healthy
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      duckdb-server:
+        condition: service_healthy
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-db-volume:
+
+networks:
+  airflow_network:
+    driver: bridge

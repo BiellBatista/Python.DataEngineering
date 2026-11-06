@@ -9,8 +9,6 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-import duckdb
-
 from common.exceptions import BronzeError, SilverError
 from config import (
     B3_CLOSE_PRICE_START,
@@ -34,7 +32,6 @@ from config import (
     BRONZE_COTAHIST_DIR,
     DUCKDB_MEMORY_LIMIT,
     DUCKDB_MEMORY_LIMIT_PATTERN,
-    DUCKDB_PRESERVE_INSERTION_ORDER,
     DUCKDB_THREADS,
     PARQUET_COMPRESSION,
     PARQUET_PER_THREAD_OUTPUT,
@@ -45,9 +42,39 @@ from historical_series.transformations.bronze import (
     find_most_recent_bronze_parquets,
     list_bronze_dirs,
 )
+from utils.duckdb_connection import connect_duckdb, execute_query
 from utils.helpers import check_directories_exist, ensure_directory_available
 
 logger = logging.getLogger(__name__)
+
+# TODO: melhorar as colunas da camada silver.
+# A coluna _ingested_at deve ser o horário que o arquivo foi pra silver.
+# A coluna _source_file deve ser o nome do arquivo que gerou a linha na silver.
+# ### 1\. Resolução dos TODOs na Camada Silver
+#
+# #### **TODO 1: Timestamp da Silver (** **\_ingested\_at** **)**
+#
+# * **Cenário atual**: A query Silver faz `SELECT _ingested_at` direto da leitura do Parquet Bronze, herdando a data de ingestão da camada anterior.
+# * **Ajuste recomendado**:
+#   1. Mantenha a data de ingestão da Bronze renomeada para `_bronze_ingested_at` (ela é essencial para ordenar a janela no `QUALIFY` e garantir idempotência).
+#   2. Adicione `$ingestion_time AS _ingested_at` (ou `CURRENT_TIMESTAMP`) para representar **o momento exato em que o registro foi gravado na Silver**.
+#
+# #### **TODO 2: Arquivo de Origem (** **\_source\_file** **)**
+#
+# * **Cenário atual**: A query repassa o `_source_file` que veio da Bronze (o nome do arquivo `.TXT` original).
+# * **Ajuste recomendado**: Diferencie as linhagens (*data lineage*):
+#   1. `_raw_source_file`: O nome do arquivo `.TXT` bruto da B3 (preservado da Bronze).
+#   2. `_bronze_source_file` / `_source_file`: O caminho do arquivo Parquet lido da Bronze (obtido ao habilitar `filename = true` no `read_parquet`).
+#
+# ---
+#
+# ### 2\. Sugestões de Melhoria e Otimização Técnica
+#
+# 1. **Tipagem Financeira (** **DECIMAL** **vs** **DOUBLE** **)**:
+#   * **Problema**: O uso de `DOUBLE` para preços (`preco_abertura`, `preco_fechamento`, etc.) pode introduzir imprecisão de ponto flutuante (ex: `12.500000000000002`).
+#   * **Solução**: Use `DECIMAL(18, 2)` (ou `DECIMAL(12, 2)`). O DuckDB realiza operações exatas com tipos `DECIMAL`, garantindo precisão financeira absoluta.
+# 2. **Deduplicação Idempotente no** **QUALIFY**:
+#   * A ordenação dentro da função de janela deve utilizar `_bronze_ingested_at DESC` e `_raw_source_file DESC`. Isso garante que, se o mesmo pregão for reprocessado a partir de um arquivo físico atualizado na Bronze, a Silver escolha deterministicamente a versão mais recente da ingestão original.
 
 COPY_QUERY = f"""
     /*
@@ -155,8 +182,10 @@ def execute_silver_load(
         dag_run_id: Identificador da execução do pipeline, armazenado nos dados.
         start_year: Primeiro ano a processar.
         end_year: Último ano a processar, inclusive.
-        memory_limit: Limite de memória DuckDB, ou ``None`` para o padrão.
-        threads: Número de threads DuckDB; ``None`` usa as CPUs disponíveis.
+        memory_limit: Limite de memória DuckDB. No modo Quack, deve
+            corresponder ao limite global do servidor; ``None`` usa o padrão.
+        threads: Número de threads DuckDB. No modo Quack, deve corresponder ao
+            limite global do servidor; localmente, ``None`` usa as CPUs disponíveis.
         input_dir: Diretório raiz de entrada da camada Bronze.
         output_dir: Diretório raiz de saída da camada Silver.
 
@@ -212,23 +241,18 @@ def execute_silver_load(
                 dir=output_path,
             )
             try:
-                con = duckdb.connect(":memory:")
+                con = connect_duckdb(
+                    memory_limit=memory_limit,
+                    threads=total_threads,
+                )
                 try:
-                    con.execute(
-                        f"SET preserve_insertion_order = "
-                        f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
-                    )
-                    con.execute(f"SET threads = {total_threads};")
-
-                    if memory_limit:
-                        con.execute(f"SET memory_limit = '{memory_limit}';")
-
                     logger.info(
                         "Threads DuckDB configuradas: %s; ano=%s",
                         total_threads,
                         Path(bronze_dir).name,
                     )
-                    con.execute(
+                    execute_query(
+                        con,
                         COPY_QUERY,
                         {
                             "input_files": recent_parquets,

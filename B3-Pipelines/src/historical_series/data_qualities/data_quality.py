@@ -4,8 +4,6 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-import duckdb
-
 from common.exceptions import BronzeError, DataQualityError
 from config import (
     B3_CLOSE_PRICE_START,
@@ -37,6 +35,7 @@ from historical_series.ingestions.raw import list_raw_dirs
 from historical_series.transformations.bronze import (
     find_most_recent_bronze_parquets,
 )
+from utils.duckdb_connection import connect_duckdb, execute_query
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +145,10 @@ def validate_bronze_quality(
         start_year: Primeiro ano do intervalo, inclusive.
         end_year: Último ano do intervalo, inclusive.
         input_dir: Diretório raiz da camada Bronze.
-        memory_limit: Limite de memória DuckDB ou ``None`` para o padrão.
-        threads: Número de threads DuckDB ou ``None`` para o padrão.
+        memory_limit: Limite de memória DuckDB. No modo Quack, deve
+            corresponder ao limite global do servidor; ``None`` usa o padrão.
+        threads: Número de threads DuckDB. No modo Quack, deve corresponder ao
+            limite global do servidor; ``None`` usa o padrão.
 
     Raises:
         ValueError: Se anos, limite de memória ou threads forem inválidos.
@@ -203,15 +204,10 @@ def _validate_bronze_quality(
         start_year,
         end_year,
     )
-    connection_config: dict[str, str] = {}
-    if memory_limit is not None:
-        connection_config["memory_limit"] = memory_limit
-    if threads is not None:
-        connection_config["threads"] = str(threads)
-
-    con = duckdb.connect(config=connection_config)
+    con = connect_duckdb(memory_limit=memory_limit, threads=threads)
     try:
-        counts = con.execute(
+        counts = execute_query(
+            con,
             f"""
             WITH parsed AS (
                 SELECT

@@ -1,0 +1,13 @@
+.env
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+airflow/airflow.cfg
+airflow/airflow.db*
+airflow/logs
+airflow/simple_auth_manager_passwords.json.generated
+tmp_*
+*.pyc

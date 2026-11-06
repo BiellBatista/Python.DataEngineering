@@ -50,6 +50,9 @@ DUCKDB_THREADS = _positive_int_from_env(
     os.cpu_count() or 4,
 )
 BRONZE_MAX_WORKERS = _positive_int_from_env("BRONZE_MAX_WORKERS", 4)
+DUCKDB_HOST = os.getenv("DUCKDB_HOST")
+DUCKDB_PORT = _positive_int_from_env("DUCKDB_PORT", 9494)
+QUACK_TOKEN = os.getenv("QUACK_TOKEN")
 
 DEFAULT_START_YEAR = _positive_int_from_env("B3_START_YEAR", 2024)
 DEFAULT_END_YEAR = _positive_int_from_env("B3_END_YEAR", 2025)

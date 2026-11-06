@@ -2,9 +2,8 @@
 
 from pathlib import Path
 
-import duckdb
-
 from config import BRONZE_COTAHIST_DIR, SILVER_COTAHIST_DIR
+from utils.duckdb_connection import connect_duckdb
 
 # Permite autocompletar e navegar no histórico com as setas do teclado (Linux/WSL).
 try:
@@ -39,7 +38,7 @@ def start_interactive_cli(
     print("  SELECT * FROM bronze LIMIT 5;")
     print("  SELECT ticker, data_pregao, preco_fechamento FROM silver LIMIT 5;\n")
 
-    con = duckdb.connect(":memory:")
+    con = connect_duckdb()
     try:
         try:
             _register_parquet_views(con, bronze_dir, silver_dir)

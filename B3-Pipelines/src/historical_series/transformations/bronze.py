@@ -8,8 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import duckdb
-
 from common.exceptions import BronzeError
 from config import (
     BRONZE_COTAHIST_DIR,
@@ -17,7 +15,7 @@ from config import (
     BRONZE_YEAR_PARTITION_TEMPLATE,
     DUCKDB_MEMORY_LIMIT,
     DUCKDB_MEMORY_LIMIT_PATTERN,
-    DUCKDB_PRESERVE_INSERTION_ORDER,
+    DUCKDB_HOST,
     DUCKDB_THREADS,
     INGESTED_DATE_FORMAT,
     INGESTED_DATE_PARTITION_NAME,
@@ -29,6 +27,7 @@ from config import (
     RAW_TEXT_QUOTE,
 )
 from historical_series.ingestions.raw import list_raw_dirs
+from utils.duckdb_connection import connect_duckdb, execute_query
 from utils.helpers import ensure_directory_available
 
 logger = logging.getLogger(__name__)
@@ -110,9 +109,11 @@ def execute_bronze_load(
         dag_run_id: Identificador da execução do pipeline.
         start_year: Primeiro ano a ingerir.
         end_year: Último ano a ingerir, inclusive.
-        memory_limit: Limite DuckDB por worker, por exemplo ``"2GB"``.
-            ``None`` deixa o DuckDB usar o padrão.
-        threads: Orçamento total de threads DuckDB, dividido entre workers.
+        memory_limit: Limite de memória DuckDB, por exemplo ``"2GB"``.
+            No modo Quack, deve corresponder ao limite global do servidor;
+            ``None`` deixa o DuckDB usar o padrão da instância.
+        threads: Número de threads DuckDB. No modo Quack, é global para a
+            instância; localmente é dividido entre os workers Bronze.
             ``None`` usa o número de CPUs disponíveis.
         max_workers: Número máximo de diretórios RAW processados em paralelo.
             ``None`` usa o padrão configurado.
@@ -148,15 +149,20 @@ def execute_bronze_load(
 
         total_threads = threads if threads is not None else (os.cpu_count() or 1)
         worker_limit = max_workers if max_workers is not None else BRONZE_MAX_WORKERS
-        workers = min(worker_limit, len(raw_dirs), total_threads)
-        # Divide o orçamento total de threads
-        # entre os workers.
-        threads_per_worker = max(1, total_threads // workers)
+        workers = min(worker_limit, len(raw_dirs))
+        if DUCKDB_HOST:
+            threads_per_worker = total_threads
+        else:
+            workers = min(workers, total_threads)
+            threads_per_worker = max(1, total_threads // workers)
 
         logger.info(f"RAW dirs encontrados: {len(raw_dirs)}")
         logger.info(f"Workers paralelos: {workers}")
-        logger.info(f"Threads DuckDB por worker: {threads_per_worker}")
-        logger.info(f"Threads totais máximas: {workers * threads_per_worker}")
+        if DUCKDB_HOST:
+            logger.info("Threads DuckDB globais no servidor: %s", total_threads)
+        else:
+            logger.info(f"Threads DuckDB por worker: {threads_per_worker}")
+            logger.info(f"Threads totais máximas: {workers * threads_per_worker}")
         logger.info(f"Destino: {output_dir}")
 
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bronze-worker") as executor:
@@ -202,8 +208,9 @@ def _load_raw_dir(
         raw_dir: Caminho do arquivo TXT a ingerir.
         dag_run_id: Identificador da execução do pipeline.
         output_dir: Diretório raiz da camada Bronze.
-        memory_limit: Limite DuckDB deste worker, ou ``None`` para o padrão.
-        duckdb_threads: Número de threads permitido nesta conexão.
+        memory_limit: Limite da instância DuckDB, ou ``None`` para o padrão.
+        duckdb_threads: Número de threads global no modo Quack ou permitido
+            nesta conexão no modo local.
         ingestion_time: Timestamp lógico usado nos metadados e na partição.
 
     Raises:
@@ -215,24 +222,12 @@ def _load_raw_dir(
     try:
         logger.info(f"Iniciando processamento: {raw_dir} (DuckDB threads={duckdb_threads})")
 
-        con = duckdb.connect()
-        # Desativa a ordenação estrita para permitir streaming direto de blocos para o disco pelas threads paralelas, otimizando o consumo de RAM.
-        # Ajusta as configurações internas do motor DuckDB para otimizar o uso de memória RAM e aumentar o throughput em operações de leitura e escrita paralelas.
-        #Define se o DuckDB deve manter a ordem exata de inserção dos registros lidos. Quando definido como False (recomendado para grandes cargas e pipelines ETL/ELT),
-        # desativa a sincronização de reordenação entre threads de gravação, reduzindo drasticamente o consumo de memória RAM e eliminando gargalos de processamento paralelo.
-        con.execute(
-            f"SET preserve_insertion_order = "
-            f"{str(DUCKDB_PRESERVE_INSERTION_ORDER).lower()};"
+        con = connect_duckdb(
+            memory_limit=memory_limit,
+            threads=duckdb_threads,
         )
-
-        if memory_limit:
-            logger.info(f"[{raw_dir}] memory_limit={memory_limit}")
-            con.execute(f"SET memory_limit = '{memory_limit}';")
-
-        # Threads internas desta conexão.
-        con.execute(f"SET threads = {duckdb_threads};")
-
-        con.execute(
+        execute_query(
+            con,
             COPY_QUERY,
             {
                 "input_dir": raw_dir,
