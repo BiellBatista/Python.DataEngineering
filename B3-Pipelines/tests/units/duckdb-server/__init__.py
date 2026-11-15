@@ -1,1 +1,0 @@
-"""Testes da conexão DuckDB."""
