@@ -1,50 +1,58 @@
 ---
-description: Regras da Arquitetura Medalhão (Raw, Bronze, Silver, Gold) e padronização de diretórios/caminhos no Data Lake da B3 no HD externo.
+description: Camadas efetivamente implementadas no B3 Pipelines e convenções atuais do Data Lake.
 ---
 
-# Rule: Arquitetura Medalhão e Diretórios do Data Lake
+# Rule: Arquitetura Medalhão e Data Lake da B3
 
-## Contexto e Papel
+## Estado atual
 
-Você é um copiloto especialista em Engenharia de Dados. Toda geração de código, arquivos ou fluxos de dados deve seguir a Arquitetura Medalhão de 4 camadas (Raw, Bronze, Silver, Gold) em um ambiente de Data Lakehouse.
+O repositório atualmente implementa a pipeline da série histórica COTAHIST da
+B3, com entradas RAW e saídas Parquet nas camadas Bronze e Silver. Gold é uma
+possibilidade futura; não há DAG, transformação ou dataset Gold implementado.
+Não trate convenções futuras como comportamento disponível.
 
-## Estrutura Física do Data Lake (HD Externo / Object Storage)
+O caminho do host é configurado por `B3_DATA_LAKE_ROOT` e montado nos
+containers como `/data-lake`. O padrão local do código é `/mnt/d/b3_datalake`;
+em Docker, o valor do host depende do `.env`.
 
-O armazenamento simula um bucket de Object Storage no HD externo:
+## Camadas implementadas
 
-`/mnt/d/b3_datalake/`
+### RAW
 
-- `raw/`: Landing Zone imutável para arquivos brutos originais (`.TXT`, `.CSV`).
-- `bronze/`: Tabela Parquet com texto bruto linha a linha + colunas de auditoria de sistema.
-- `silver/`: Dados limpos, fortemente tipados, deduplicados e particionados em formato Parquet no estilo Hive.
-- `gold/`: Datamarts desnormalizados com agregados e indicadores de negócio.
+- O arquivo COTAHIST original é preparado fora desta DAG; a pipeline não o
+  baixa nem altera.
+- Padrão no container:
+  `/data-lake/raw/cotahist/ano=AAAA/COTAHIST_A{AAAA}.TXT`.
+- A DAG verifica existência, conteúdo não vazio, largura de 245 bytes e tipos
+  de registro `00`, `01` e `99`. Ela não exige necessariamente a presença de
+  header ou trailer.
 
-## Diretrizes por Camada
+### Bronze
 
-### Camada 0: Raw (Landing Zone)
+- DuckDB converte cada linha em Parquet, preservando-a na coluna `content`.
+- Metadados: `_ingested_at`, `_source_file`, `_dag_run_id`, `year` e
+  `_ingested_date`.
+- Particionamento:
+  `/data-lake/bronze/cotahist/year=AAAA/_ingested_date=<timestamp>/`.
+- Compressão ZSTD; row group de 122.880 linhas.
 
-- Pouso imutável do arquivo bruto original da B3 (`COTAHIST_AYYYY.TXT`).
-- Caminho: `/mnt/d/b3_datalake/raw/cotahist/ano=YYYY/COTAHIST_AYYYY.TXT`.
-- Nunca alterar, recortar ou editar o conteúdo dos arquivos brutos baixados.
+### Silver
 
-### Camada 1: Bronze (Raw Ingestion + System Metadata)
+- A transformação processa somente registros COTAHIST `01`, converte campos
+  de cotação para tipos estruturados e deduplica por
+  `(ticker, data_pregao, tipo_mercado)`.
+- O campo chamado `preco_fechamento` no dataset corresponde a `PREULT`
+  (último negócio), não ao preço oficial de fechamento.
+- Particionamento anual:
+  `/data-lake/silver/cotacoes_historicas/year=AAAA/`.
+- A escrita ocorre em staging; a promoção substitui apenas o ano solicitado e
+  procura preservar/restaurar a versão anterior se a operação falhar.
 
-- Converter o arquivo texto bruto para estrutura de tabela em Parquet sem aplicar regras de parsing de negócio.
-- Utilizar DuckDB com a função `read_csv()`.
-- Colunas obrigatórias:
-  - `content` (`VARCHAR`): Linha inteira de texto bruta.
-  - `_ingested_at` (`TIMESTAMP`): Timestamp exato do processamento.
-  - `_source_file` (`VARCHAR`): Nome do arquivo físico de origem.
-  - `_dag_run_id` (`VARCHAR`): ID da execução do Airflow.
-- Salvar em: `/mnt/d/b3_datalake/bronze/cotahist/year=YYYY/_ingested_date=YYYY-MM-DD_HH-MM-SS/`.
+## Convenções para evolução
 
-### Camada 2: Silver (Cleansed, Typed, Deduplicated & Partitioned)
-
-- Aplicar parsing posicional dos campos, conversão de tipos primitivos, deduplicação e filtro de dados válidos.
-- Salvar em formato Parquet com particionamento Hive por data:
-  `/mnt/d/b3_datalake/silver/cotacoes_historicas/data_pregao=YYYY-MM-DD/`.
-
-### Camada 3: Gold (Business Aggregates & Datamarts)
-
-- Tabelas agregadas e visões prontas para consumo analítico e BI.
-- Salvar em: `/mnt/d/b3_datalake/gold/`.
+- Para novos datasets, mantenha nomes e partições alinhados ao contrato real
+  de cada pipeline e documente-os em sua própria documentação.
+- Não declare camadas Gold, particionamento por data de pregão ou métricas
+  analíticas como existentes sem uma implementação correspondente.
+- Respeite que os containers Airflow e DuckDB precisam enxergar os arquivos
+  pelo mesmo caminho de container dentro de `/data-lake`.

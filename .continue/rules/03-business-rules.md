@@ -1,38 +1,49 @@
 ---
-description: Regras de negócio e parsing posicional (SUBSTR) para arquivos COTAHIST da B3, deduplicação na camada Prata e cálculo de métricas financeiras (SMA, variação, rankings) na Ouro.
+description: Regras implementadas de validação e transformação dos arquivos COTAHIST da B3.
 ---
 
-# Rule: Regras de Negócio e Parsing (B3 COTAHIST)
+# Rule: Regras de negócio e parsing COTAHIST
 
-## Parsing Posicional (DuckDB / SQL)
+As regras abaixo refletem a implementação atual da pipeline histórica. A fonte
+de verdade detalhada é
+[docs/historical-series/regras-requisitos.md](../../B3-Pipelines/docs/historical-series/regras-requisitos.md).
 
-Ao processar a coluna `content` da camada Bronze para a Prata, aplicar as seguintes extrações posicionais via `SUBSTR()`:
+## Entrada RAW
 
-- **Filtro de Registro**: Filtrar apenas registros do tipo lote padrão (`SUBSTR(content, 1, 2) = '01'`).
-- **Campos**:
-  - `data_pregao`: `SUBSTR(content, 3, 8)::DATE` (Formato YYYYMMDD).
-  - `ticker`: `TRIM(SUBSTR(content, 13, 12))` (Código do ativo, ex: PETR4).
-  - `tipo_mercado`: `SUBSTR(content, 25, 3)` (BDI).
-  - `preco_abertura`: `CAST(SUBSTR(content, 57, 13) AS DOUBLE) / 100.0`.
-  - `preco_maximo`: `CAST(SUBSTR(content, 70, 13) AS DOUBLE) / 100.0`.
-  - `preco_minimo`: `CAST(SUBSTR(content, 83, 13) AS DOUBLE) / 100.0`.
-  - `preco_fechamento`: `CAST(SUBSTR(content, 109, 13) AS DOUBLE) / 100.0`.
-  - `volume_total`: `CAST(SUBSTR(content, 171, 18) AS DOUBLE) / 100.0`.
+- Caminho padrão no container:
+  `/data-lake/raw/cotahist/ano=AAAA/COTAHIST_A{AAAA}.TXT`.
+- Cada linha deve ter 245 bytes, sem contar LF/CR, e código inicial `00`, `01`
+  ou `99`.
+- Arquivo ausente, vazio, linha vazia, largura incorreta ou tipo não aceito
+  causa falha. Não há regra exigindo um header e trailer em todos os arquivos.
 
-## Deduplicação e Idempotência (Camada Prata)
+## Data Quality Bronze
 
-Garantir que reprocessamentos do mesmo dia não gerem registros duplicados na Prata utilizando Window Functions no DuckDB:
+- Avaliar apenas o registro de negociação `01` nos Parquets da ingestão mais
+  recente do ano.
+- Data de pregão deve ser interpretável e ticker não pode ser nulo/vazio.
+- Abertura, máxima, mínima e `PREULT` precisam ser positivos e válidos, exceto
+  quando o tipo de mercado é `020` e os quatro valores são zero.
+- Máxima não pode ser inferior à mínima; deve existir ao menos uma negociação.
+- A rotina de qualidade rejeita a carga; não corrige nem remove os registros.
 
-```sql
-QUALIFY row_number() OVER (
-    PARTITION BY ticker, data_pregao 
-    ORDER BY _ingested_at DESC
-) = 1
-```
+## Transformação Silver
 
-## Métricas e Datamarts (Camada Ouro)
+- Filtrar registros cujo código seja `01`.
+- `data_pregao`: posições 3–10, formato `YYYYMMDD`.
+- `ticker`: posições 13–24, com espaços externos removidos.
+- `tipo_mercado`: posições 25–27.
+- Preços: posições 57–69 (abertura), 70–82 (máxima), 83–95 (mínima) e
+  109–121 (`PREULT`), com escala centesimal para `DECIMAL(18, 2)`.
+- Volume total: posições 171–188, convertido para `DECIMAL(18, 2)` com escala
+  centesimal.
+- Deduplicar por `ticker`, `data_pregao` e `tipo_mercado`; ordenar por
+  `_bronze_ingested_at` decrescente, `_raw_source_file` decrescente e
+  `_bronze_source_file` decrescente para desempate.
+- `preco_fechamento` representa `PREULT` (último negócio), não o fechamento
+  oficial do pregão.
 
-- **Média Móvel Simples (SMA)**: Média de 7 e 21 dias úteis do preço de fechamento por ativo:
-  `AVG(preco_fechamento) OVER (PARTITION BY ticker ORDER BY data_pregao ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)`
-- **Variação Diária (%)**: `((preco_fechamento - preco_abertura) / preco_abertura) * 100.0`
-- **Ranking Mensal**: Top 10 ativos com maior volume financeiro total negociado no mês.
+## Escopo futuro
+
+Não aplicar à pipeline atual fórmulas de média móvel, variação diária ou
+rankings: não há camada Gold ou cálculo dessas métricas implementado.

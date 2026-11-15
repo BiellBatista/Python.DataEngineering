@@ -1,33 +1,46 @@
 ---
-description: Padrões técnicos e boas práticas de código para DuckDB, Airflow 3.x (TaskFlow API), Parquet (zstd, Hive) e Python (tipagem, logs, idempotência).
+description: Práticas confirmadas no B3 Pipelines para Python, Airflow, DuckDB e Parquet.
 ---
 
-# Rule: Boas Práticas Tecnológicas (DuckDB, Airflow 3.x, Parquet e Python)
+# Rule: Práticas tecnológicas do B3 Pipelines
 
-## DuckDB
+## DuckDB e processamento
 
-- **Processamento**: Preferir conexões em memória (`duckdb.connect(":memory:")`) ou persistidas locais, permitindo *spilling to disk* quando necessário.
-- **Escrita Paralela**: Para grandes gravações na Silver/Gold, utilizar o parâmetro `PER_THREAD_OUTPUT` no comando `COPY`.
-- **Evolução de Schema**: Ao ler múltiplos arquivos Parquet com colunas variáveis, utilizar `union_by_name = true`.
-- **Concorrência**: DuckDB suporta múltiplos leitores simultâneos, mas possui controle de escrita de processo único (*single writer*). Fechar conexões de escrita antes de iniciar novas etapas.
+- Manter transformações, filtros, deduplicação e escritas Parquet no DuckDB;
+  usar Python para orquestração, conexão e operações de arquivos necessárias.
+- A conexão pode ser DuckDB embutido ou cliente para o serviço Quack, conforme
+  `DUCKDB_HOST`.
+- No Compose, Quack é uma única instância compartilhada. Memória e threads são
+  limites globais configurados no servidor; não os trate como reserva por task.
+- Use `union_by_name = true` ao ler Parquets com esquemas potencialmente
+  diferentes.
+- Feche conexões ao concluir o uso e propague erros; não converta falhas em
+  resultados de sucesso.
 
-## Apache Parquet
+## Parquet e partições
 
-- Utilizar compressão `zstd` e `ROW_GROUP_SIZE` de 122.880 linhas por padrão.
-- **Particionamento Hive**: Organizar pastas no formato `coluna=valor/` para permitir *Partition Pruning* durante consultas SQL.
-- Aproveitar o *Data Skipping* nativo utilizando as estatísticas min/max salvas no rodapé (*Footer*) do arquivo Parquet.
+- A configuração atual usa compressão ZSTD e `ROW_GROUP_SIZE` 122.880.
+- Use partições Hive coerentes com o contrato de saída da pipeline. Na série
+  histórica, Bronze particiona por ano e timestamp de ingestão; Silver por ano.
+- A saída Silver atual não habilita `PER_THREAD_OUTPUT`.
+- Evite materializar conjuntos grandes no processo Python quando SQL no
+  DuckDB puder fazer a operação.
 
-## Apache Airflow 3.x
+## Airflow
 
-- **TaskFlow API**: Escrever DAGs utilizando exclusivamente os decoradores `@dag` e `@task`.
-- **ObjectStoragePath**: Utilizar a abstração `ObjectStoragePath` para manipulação portátil de caminhos no HD externo.
-- **Idempotência**:
-  - Sempre parametrizar execuções utilizando `logical_date` (ou `data_interval_start`/`data_interval_end`).
-  - Configurar `catchup=False` por padrão na `@dag`.
-- **XComs**: Passar apenas caminhos de arquivos e metadados leves entre tarefas via XComs implícitos da TaskFlow API.
+- A DAG atual usa TaskFlow API (`@dag`, `@task` e `@task_group`) e mapeamento
+  dinâmico por ano.
+- Mantenha `catchup=False` e idempotência/estratégia de substituição alinhadas
+  às garantias de cada tarefa; a DAG atual é manual (`schedule=None`).
+- Passe entre tasks somente metadados leves, como anos e IDs de execução.
+- O Compose usa `LocalExecutor`; não pressuponha workers isolados ou
+  armazenamento distribuído.
 
-## Python
+## Python e operação
 
-- Incluir Type Hints em todas as funções (`def task(path: str) -> str:`).
-- Evitar Pandas para transformações volumosas quando a operação puder ser feita via SQL analítico no DuckDB.
-- Registrar logs de progresso utilizando o logger padrão do Airflow (`logging.getLogger("airflow.task")`).
+- Preserve type hints, logs, validações explícitas e exceções tipadas em
+  operações de arquivos e processamento.
+- Caminhos de dados são montados no mesmo volume compartilhado pelos
+  containers que os leem ou escrevem.
+- Não presuma o uso de abstrações ainda ausentes, como `ObjectStoragePath`;
+  consulte e estenda os padrões já usados no projeto.

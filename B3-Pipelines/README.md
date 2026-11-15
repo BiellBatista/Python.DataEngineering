@@ -1,79 +1,57 @@
 # B3 Pipelines
 
-## Descrição
+## Descrição e objetivo
 
-Pipeline ELT para a série histórica de cotações da B3 no layout COTAHIST. O
-Airflow orquestra o fluxo e o DuckDB processa os arquivos e grava os resultados
-em Parquet. No Docker Compose, o Airflow usa serviços para API/UI, scheduler,
-DAG processor e inicialização do banco/usuário; DuckDB/Quack executa em serviço
-separado e atende as consultas remotas.
+B3 Pipelines é a base de execução e operação de pipelines de dados da B3. Ela
+reúne orquestração, processamento analítico e armazenamento em arquivos para
+que cada pipeline implemente seu próprio fluxo, suas regras de negócio e seus
+contratos de entrada e saída.
 
-## Objetivo
+O objetivo do repositório é oferecer uma stack local reproduzível, extensível e
+observável para processar dados preparados no Data Lake. Hoje há uma pipeline
+implementada: **série histórica de cotações COTAHIST**. As decisões e regras
+específicas dela estão na [documentação da DAG](docs/historical-series/index.md).
 
-Transformar arquivos COTAHIST já disponíveis no data lake em camadas Bronze e
-Silver rastreáveis e particionadas, com verificações de qualidade antes de
-promover dados para consumo analítico.
+## Escopo da plataforma
 
-## O que faz
+Em termos gerais, uma pipeline deste projeto pode validar uma entrada
+disponível, transformá-la com DuckDB, registrar metadados de execução e
+persistir resultados Parquet no Data Lake. As etapas e garantias concretas são
+definidas por cada DAG; não se presume que todas as pipelines executem o mesmo
+fluxo.
 
-- Valida os arquivos RAW anuais: existência, linhas de 245 bytes e tipos de
-  registro COTAHIST aceitos: header (`00`), negociação (`01`) e trailer (`99`).
-- Converte TXT para Parquet Bronze, acrescentando metadados de ingestão,
-  arquivo-fonte, execução e ano.
-- Verifica a qualidade Bronze nos Parquets da ingestão mais recente de cada
-  ano, incluindo chaves, preços e faixas. Registros do mercado fracionário
-  (`020`) com os quatro preços zerados são aceitos como preços não informados.
-  O campo `preco_fechamento` corresponde ao `PREULT` do layout da B3 (último
-  negócio), não ao preço oficial de fechamento do pregão.
-- Transforma e deduplica as cotações Silver com valores financeiros
-  `DECIMAL(18, 2)`, metadados de ingestão Silver e linhagem dos arquivos RAW e
-  Parquet Bronze; atualiza apenas as partições anuais solicitadas e preserva a
-  saída anterior se a promoção falhar.
-- Processa anos de forma independente no Airflow; a falha em um ano não impede
-  os outros anos do mapeamento de serem executados.
-- Mantém os dados do lake em arquivos no caminho configurado no host, visível
-  aos containers Airflow e DuckDB como `/data-lake`.
+A plataforma fornece os serviços compartilhados de Airflow, PostgreSQL para
+metadados do Airflow e DuckDB/Quack para processamento remoto. Os dados são
+mantidos em arquivos no diretório do host montado nos containers em
+`/data-lake`.
 
-## O que não faz
+### O que a plataforma não é
 
-- Não baixa os arquivos da B3: os TXT COTAHIST precisam estar no data lake
-  antes da execução.
-- Não usa PostgreSQL para armazenar as cotações. PostgreSQL guarda somente os
-  metadados e o estado do Airflow.
-- Não fornece dashboard de negócio, API analítica, catálogo de dados ou camada
-  Gold.
-- Não inicia ingestões agendadas: a DAG é manual (`schedule=None`) e permite
-  somente uma execução ativa por vez.
-- Não é um cluster distribuído ou de alta disponibilidade. O Compose usa
-  `LocalExecutor` e um único servidor DuckDB/Quack.
-- Não publica Quack no host nem configura TLS para as conexões Quack na rede
-  Docker. Para acesso remoto, é necessário um proxy reverso com TLS.
+- Não baixa nem recebe automaticamente dados de sistemas externos: a
+  aquisição e preparação da entrada pertencem à fonte ou à pipeline.
+- Não é um produto analítico pronto, dashboard, API de negócio ou catálogo de
+  dados.
+- Não implementa por padrão uma camada Gold nem métricas de negócio; novas
+  pipelines podem introduzir essas saídas se houver requisitos.
+- Não é um cluster distribuído ou de alta disponibilidade: o Compose usa
+  `LocalExecutor` e uma única instância DuckDB/Quack.
+- Não define uma agenda universal para os dados; agendamento, execução manual
+  e parâmetros são responsabilidade de cada DAG.
 
-Para detalhes de topologia, comunicação entre containers, autenticação,
-persistência e variáveis de ambiente, consulte
-[docs/infraestrutura.md](docs/infraestrutura.md).
+## Fluxo funcional da plataforma
 
-## Fluxo funcional
+O fluxo abaixo é uma visão geral das responsabilidades, não um contrato que
+substitui o fluxo documentado por cada DAG:
 
-Para cada ano selecionado na execução manual:
+1. A pessoa operadora prepara ou disponibiliza a entrada no Data Lake.
+2. Airflow inicia uma pipeline manualmente ou conforme a agenda definida por
+   ela.
+3. As tasks aplicam validações e transformações implementadas pela pipeline.
+4. DuckDB processa os dados e grava as saídas configuradas no Data Lake.
+5. Airflow registra o estado e os logs da execução para acompanhamento.
 
-1. Airflow valida o COTAHIST RAW no volume compartilhado.
-2. O worker solicita ao DuckDB remoto a leitura do TXT e a gravação Bronze.
-3. Airflow valida somente os Parquets da ingestão Bronze mais recente daquele
-   ano.
-4. DuckDB lê Bronze, transforma, deduplica e grava Silver em staging.
-5. O worker promove somente a partição Silver do ano após a escrita concluir.
-
-A DAG permite uma execução ativa por vez. As tasks têm uma nova tentativa
-após três minutos; falhas de Data Quality são levantadas como falha explícita
-e não são repetidas.
-
-As transformações, filtros, agregações e escritas Parquet são executados pelo
-motor DuckDB; Python controla conexões e fluxo. A validação RAW percorre as
-linhas em Python para conferir largura e tipo de registro. A API Python não
-implica por si só perda de desempenho: o que deve ser evitado para cargas
-grandes é materializar o conjunto inteiro no processo Python ou iterar
-registro a registro para transformar dados.
+Para a topologia, comunicação entre containers, autenticação, persistência e
+variáveis de ambiente, consulte [docs/infraestrutura.md](docs/infraestrutura.md).
 
 ## Visão arquitetural (C4)
 
@@ -81,20 +59,20 @@ Os diagramas Mermaid mostram o contexto (C1) e os containers (C2). A
 configuração detalhada da infraestrutura está em
 [docs/infraestrutura.md](docs/infraestrutura.md).
 
-### C1 — Contexto do sistema
+### C1 — Contexto da plataforma
 
 ```mermaid
 flowchart LR
-    Eng["Pessoa engenheira de dados"]
-    B3["Arquivos COTAHIST da B3<br/>(entrada preparada fora deste projeto)"]
-    System["B3 Pipelines<br/>Orquestra e processa a série histórica"]
-    Lake[("Data lake no HD externo<br/>TXT e Parquet")]
-    Meta[("PostgreSQL<br/>metadados do Airflow")]
+    Operator["Pessoa operadora"]
+    Sources["Fontes de dados<br/>preparação externa ou sistemas integrados"]
+    Platform["B3 Pipelines<br/>Airflow + processamento das DAGs"]
+    Lake[("Data Lake<br/>arquivos de entrada e saída")]
+    Metadata[("PostgreSQL<br/>metadados e estado do Airflow")]
 
-    Eng -->|"Configura e inicia execução manual"| System
-    B3 -->|"Arquivos TXT previamente copiados"| Lake
-    System -->|"Lê RAW e grava Bronze/Silver"| Lake
-    System -->|"Lê/grava estado de execução"| Meta
+    Operator -->|"Configura e dispara DAGs"| Platform
+    Sources -->|"Disponibiliza entradas"| Lake
+    Platform -->|"Lê entradas e grava saídas"| Lake
+    Platform -->|"Registra estado e execuções"| Metadata
 ```
 
 ### C2 — Containers e relações
@@ -122,64 +100,44 @@ flowchart LR
     Processor -->|"publica metadados das DAGs"| DB
     Scheduler -->|"worker local: Execution API + JWT"| API
     Scheduler -->|"Quack + QUACK_TOKEN"| Quack
-    Scheduler -.->|"valida RAW pelo bind mount"| Lake
-    Quack -.->|"lê TXT/Parquet e grava Parquet"| Lake
+    Scheduler -.->|"tasks acessam entradas no bind mount"| Lake
+    Quack -.->|"lê e grava arquivos de dados"| Lake
 ```
 
 ## Stack utilizada
 
 | Tecnologia | Uso |
 |---|---|
-| Python 3.12 | DAG, validação RAW e integração com DuckDB |
+| Python 3.12 | DAGs, tasks Python e integração com DuckDB |
 | Apache Airflow 3.3.1 | API/UI, agendamento e processamento das tarefas |
 | `LocalExecutor` | Execução local das tarefas do Airflow |
-| DuckDB 2.0.0 | Motor analítico e conversão de TXT/Parquet |
+| DuckDB 2.0.0 | Motor analítico e processamento de arquivos |
 | Quack | Protocolo HTTP interno entre clientes Python DuckDB e o servidor |
 | PostgreSQL 15 | Banco de metadados persistente do Airflow |
 | Docker Compose | Orquestração do ambiente local |
-| Parquet + compressão ZSTD | Armazenamento das camadas Bronze e Silver |
-| HD externo montado pelo Docker | Data lake persistente compartilhado pelos serviços |
+| Parquet + compressão ZSTD | Formato de saída das pipelines que o configuram |
+| Volume local montado pelo Docker | Data Lake persistente compartilhado pelos serviços |
 
 O Python API é usado como interface cliente; SQL permanece no DuckDB. O
-servidor é uma única instância. `DUCKDB_MEMORY_LIMIT` e `DUCKDB_THREADS`, do
-`.env`, e `DUCKDB_PRESERVE_INSERTION_ORDER`, do código, são configurações
-globais compartilhadas por todas as tarefas. Os parâmetros de uma execução
-Airflow precisam corresponder aos valores do `.env`. Com
-`BRONZE_MAX_WORKERS=4`, até quatro tarefas mapeadas podem competir pelos
-recursos globais e pela largura de banda do mesmo disco. Ajuste concorrência,
-threads e memória em conjunto, considerando os recursos alocados ao Docker
-Desktop.
+servidor é uma única instância e suas configurações de memória e threads são
+globais, compartilhadas pelas tasks. Ajuste concorrência, threads e memória
+em conjunto, considerando os recursos alocados ao Docker Desktop e o acesso
+ao volume compartilhado.
 
-## Data lake
+## Data Lake
 
-O caminho no host é definido em `B3_DATA_LAKE_ROOT`. No Compose, esse diretório
-é montado nos containers Airflow e DuckDB como `/data-lake`, portanto não
-existe cópia intermediária do dataset para o filesystem efêmero dos containers.
-Fora do Compose, o padrão de `src/config.py` é `/mnt/d/b3_datalake`.
+O caminho persistente no host é definido por `B3_DATA_LAKE_ROOT`; no Compose,
+ele é montado nos containers como `/data-lake`. Os diretórios abaixo ilustram
+uma convenção geral de organização — nomes de datasets, partições e formatos
+dependem de cada pipeline:
 
 ```text
 <B3_DATA_LAKE_ROOT>/
-├── raw/
-│   └── cotahist/
-│       └── ano=2024/
-│           └── COTAHIST_A2024.TXT
-├── bronze/
-│   └── cotahist/
-│       └── year=2024/
-│           └── _ingested_date=<timestamp>/
-│               └── *.parquet
-└── silver/
-    └── cotacoes_historicas/
-        └── year=2024/
-            └── *.parquet
+├── raw/       # entradas originais preparadas para processamento
+├── bronze/    # dados brutos estruturados e metadados técnicos
+├── silver/    # dados tipados/validados, quando definidos pela pipeline
+└── gold/      # reservado a produtos agregados futuros; não implementado hoje
 ```
-
-Os nomes e diretórios efetivos podem ser personalizados por
-`B3_RAW_COTAHIST_DIR`, `B3_BRONZE_COTAHIST_DIR` e
-`B3_SILVER_COTAHIST_DIR`. No Compose, configure esses caminhos no namespace do
-container, sob `/data-lake`, pois somente `B3_DATA_LAKE_ROOT` é montado do host.
-A localização RAW é verificada pelo Airflow no volume compartilhado; as
-consultas de transformação e validação Bronze são executadas no DuckDB.
 
 O volume nomeado `postgres-db-volume` é separado do data lake e preserva o
 banco do Airflow entre reinicializações. `docker compose down` não o remove;
@@ -197,10 +155,9 @@ operar os serviços, consulte os capítulos
 ### Requisitos
 
 - Docker Engine ou Docker Desktop com Docker Compose v2 e recursos suficientes
-  para o período COTAHIST processado.
+  para as pipelines que serão executadas.
 - Python 3 no host para executar o launcher.
-- HD externo montado e acessível ao Docker Desktop/WSL.
-- Arquivos COTAHIST no padrão de diretórios e nomes mostrado acima.
+- Diretório persistente do Data Lake montado e acessível ao Docker.
 
 ### Configuração de ambiente
 
@@ -215,9 +172,9 @@ cp .env.example .env
 ```
 
 Se `.env` já existir, preserve-o e edite somente as variáveis necessárias.
-Configure `B3_DATA_LAKE_ROOT` com o caminho absoluto do HD externo visível ao
-Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL quando necessário
-(por exemplo, o resultado de `id -u`).
+Configure `B3_DATA_LAKE_ROOT` com o caminho absoluto do diretório persistente
+visível ao Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL
+quando necessário (por exemplo, o resultado de `id -u`).
 
 `AIRFLOW_BASE_IMAGE` e `DUCKDB_BASE_IMAGE` definem as imagens base dos
 Dockerfiles correspondentes e são passadas como argumentos de build pelo
@@ -276,9 +233,10 @@ Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
 
 O launcher valida a configuração do Compose, constrói e inicia PostgreSQL,
 DuckDB/Quack e os serviços Airflow, aguarda o endpoint de saúde do Airflow e
-abre a página da DAG `b3_cotahist_medallion_pipeline` no navegador. Se o
-navegador não abrir automaticamente, acesse `http://localhost:8080` (ou a
-porta definida por `AIRFLOW_PORT`) e abra a DAG manualmente.
+abre a página da DAG configurada em `setup/start.py` (atualmente, a pipeline
+COTAHIST). Se o navegador não abrir automaticamente, acesse
+`http://localhost:8080` (ou a porta definida por `AIRFLOW_PORT`). A lista de
+DAGs e seus parâmetros depende das pipelines instaladas.
 
 Para iniciar a stack manualmente, use:
 
@@ -301,61 +259,34 @@ docker compose down
 ### Operação e exemplos
 
 ```sh
-# Consultar estado e logs
+# Consultar estado e logs dos serviços compartilhados
 docker compose ps
 docker compose logs --tail=100 airflow-api-server airflow-scheduler \
   airflow-dag-processor duckdb-server
 
-# Conferir DAGs e erros de importação
+# Conferir DAGs carregadas e erros de importação
 docker compose exec airflow-dag-processor airflow dags list
 docker compose exec airflow-dag-processor \
   airflow dags list-import-errors --output json
 
-# Consultar a conta administrativa
+# Consultar usuários do Airflow
 docker compose exec airflow-api-server airflow users list
 
 # Parar os serviços mantendo os dados persistentes
 docker compose down
 ```
 
-Na UI, abra `b3_cotahist_medallion_pipeline` e inicie uma execução manual.
-Informe `start_year` e `end_year` (inclusive, entre 1986 e 2030, com o inicial
-menor ou igual ao final); `memory_limit` e `threads` devem corresponder a
-`DUCKDB_MEMORY_LIMIT` e `DUCKDB_THREADS` do `.env`, pois são configurações
-globais do servidor compartilhado.
-
-Para inspecionar diretamente a camada Silver com o cliente Python no container:
-
-```sh
-docker compose exec airflow-scheduler python -c \
-  "from utils.duckdb_connection import connect_duckdb; \
-c=connect_duckdb(); \
-print(c.execute(\"SELECT year, count(*) FROM read_parquet('/data-lake/silver/cotacoes_historicas/**/*.parquet', hive_partitioning=true) GROUP BY year ORDER BY year\").fetchall()); \
-c.close()"
-```
+Para executar uma DAG, consulte os parâmetros, pré-requisitos e passos de
+operação documentados para aquela pipeline. A
+[pipeline COTAHIST](docs/historical-series/index.md) é o exemplo atualmente
+implementado.
 
 ### Execução local sem Compose
 
-Para desenvolvimento sem Quack, DuckDB usa uma conexão embutida quando
-`DUCKDB_HOST` não está definido. Em um ambiente virtual compatível com Python
-3.10 ou superior:
-
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .
-# Ajuste para o caminho absoluto do data lake no seu host.
-export B3_DATA_LAKE_ROOT=/mnt/d/b3_datalake
-unset DUCKDB_HOST
-python -m main
-python -m run_sql
-```
-
-`python -m main` executa Bronze e Silver sequencialmente usando os padrões de
-`B3_START_YEAR`, `B3_END_YEAR` e dos limites, ou valores que você exportar no
-shell. `python -m run_sql` abre um REPL para consultar os Parquets. Para executar o
-Airflow com DuckDB remoto, use `./setup.sh`. O Docker Compose é o caminho
-recomendado para executar a DAG e validar a arquitetura com Quack.
+O pacote pode ser instalado em ambiente virtual para desenvolvimento e testes.
+O modo de execução sem Compose, os comandos de entrada e os caminhos válidos
+dependem da pipeline e devem ser seguidos na documentação dela. Para executar a
+stack Airflow com DuckDB remoto, use o Compose conforme as instruções acima.
 
 ### Testes
 
@@ -391,6 +322,8 @@ python -m compileall -q src airflow/dags duckdb-server
   e da [receita de proxy reverso](https://duckdb.org/docs/2.0/quack/setup/reverse_proxy).
 - O token autentica clientes, mas não substitui isolamento de rede nem limita
   o SQL que um cliente autorizado pode executar.
-- O servidor DuckDB é único; o data lake é persistido no HD externo e os
-  metadados do Airflow no volume Docker do PostgreSQL. Faça backup de ambos de
-  acordo com a política do ambiente.
+- O servidor DuckDB é único; o Data Lake é persistido no diretório do host e
+  os metadados do Airflow no volume Docker do PostgreSQL. Faça backup de ambos
+  de acordo com a política do ambiente.
+- A documentação específica da pipeline atual está organizada em
+  [docs/historical-series/](docs/historical-series/index.md).
