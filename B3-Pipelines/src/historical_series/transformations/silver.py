@@ -6,13 +6,13 @@ import re
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from common.exceptions import BronzeError, SilverError
 from config import (
     B3_CLOSE_PRICE_START,
-    B3_DECIMAL_SCALE,
     B3_HIGH_PRICE_START,
     B3_LOW_PRICE_START,
     B3_MARKET_TYPE_LENGTH,
@@ -47,35 +47,6 @@ from utils.helpers import check_directories_exist, ensure_directory_available
 
 logger = logging.getLogger(__name__)
 
-# TODO: melhorar as colunas da camada silver.
-# A coluna _ingested_at deve ser o horário que o arquivo foi pra silver.
-# A coluna _source_file deve ser o nome do arquivo que gerou a linha na silver.
-# ### 1\. Resolução dos TODOs na Camada Silver
-#
-# #### **TODO 1: Timestamp da Silver (** **\_ingested\_at** **)**
-#
-# * **Cenário atual**: A query Silver faz `SELECT _ingested_at` direto da leitura do Parquet Bronze, herdando a data de ingestão da camada anterior.
-# * **Ajuste recomendado**:
-#   1. Mantenha a data de ingestão da Bronze renomeada para `_bronze_ingested_at` (ela é essencial para ordenar a janela no `QUALIFY` e garantir idempotência).
-#   2. Adicione `$ingestion_time AS _ingested_at` (ou `CURRENT_TIMESTAMP`) para representar **o momento exato em que o registro foi gravado na Silver**.
-#
-# #### **TODO 2: Arquivo de Origem (** **\_source\_file** **)**
-#
-# * **Cenário atual**: A query repassa o `_source_file` que veio da Bronze (o nome do arquivo `.TXT` original).
-# * **Ajuste recomendado**: Diferencie as linhagens (*data lineage*):
-#   1. `_raw_source_file`: O nome do arquivo `.TXT` bruto da B3 (preservado da Bronze).
-#   2. `_bronze_source_file` / `_source_file`: O caminho do arquivo Parquet lido da Bronze (obtido ao habilitar `filename = true` no `read_parquet`).
-#
-# ---
-#
-# ### 2\. Sugestões de Melhoria e Otimização Técnica
-#
-# 1. **Tipagem Financeira (** **DECIMAL** **vs** **DOUBLE** **)**:
-#   * **Problema**: O uso de `DOUBLE` para preços (`preco_abertura`, `preco_fechamento`, etc.) pode introduzir imprecisão de ponto flutuante (ex: `12.500000000000002`).
-#   * **Solução**: Use `DECIMAL(18, 2)` (ou `DECIMAL(12, 2)`). O DuckDB realiza operações exatas com tipos `DECIMAL`, garantindo precisão financeira absoluta.
-# 2. **Deduplicação Idempotente no** **QUALIFY**:
-#   * A ordenação dentro da função de janela deve utilizar `_bronze_ingested_at DESC` e `_raw_source_file DESC`. Isso garante que, se o mesmo pregão for reprocessado a partir de um arquivo físico atualizado na Bronze, a Silver escolha deterministicamente a versão mais recente da ingestão original.
-
 COPY_QUERY = f"""
     /*
     ===========================================================================
@@ -97,13 +68,15 @@ COPY_QUERY = f"""
          • data_pregao: Converte a string 'YYYYMMDD' para o tipo `DATE`.
          • ticker: Código do ativo tratado com `TRIM()`.
          • tipo_mercado: Código BDI do mercado.
-         • Preços e Volumes: Conversão para `DOUBLE` e divisão por 100.0 
-           para ajustar as casas decimais monetárias.
+         • Preços e volumes: Conversão exata para `DECIMAL(18, 2)`.
+       - Preserva `_bronze_ingested_at` e `_raw_source_file`, e registra
+         `_bronze_source_file` com o caminho físico do Parquet lido.
 
     4. Deduplicação e Idempotência (QUALIFY):
        - Utiliza uma Window Function (`row_number`) particionando por 
-         `ticker`, `data_pregao` e `tipo_mercado`, ordenada de forma decrescente 
-         pelo momento da ingestão (`_ingested_at`) e arquivo fonte.
+         `ticker`, `data_pregao` e `tipo_mercado`, ordenada por ingestão Bronze,
+         arquivo TXT de origem e caminho Parquet para desempate determinístico.
+       - `_ingested_at` registra o horário da carga na camada Silver.
        - Garante que reprocessamentos (idempotência) mantenham sempre 
          apenas a versão mais recente do registro.
 
@@ -122,15 +95,36 @@ COPY_QUERY = f"""
                 strptime(SUBSTR(content, {B3_TRADE_DATE_START}, {B3_TRADE_DATE_LENGTH}), '{B3_TRADE_DATE_FORMAT}')::DATE AS data_pregao,
                 TRIM(SUBSTR(content, {B3_TICKER_START}, {B3_TICKER_LENGTH})) AS ticker,
                 SUBSTR(content, {B3_MARKET_TYPE_START}, {B3_MARKET_TYPE_LENGTH}) AS tipo_mercado,
-                CAST(SUBSTR(content, {B3_OPEN_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_abertura,
-                CAST(SUBSTR(content, {B3_HIGH_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_maximo,
-                CAST(SUBSTR(content, {B3_LOW_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_minimo,
-                CAST(SUBSTR(content, {B3_CLOSE_PRICE_START}, {B3_PRICE_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS preco_fechamento,
-                CAST(SUBSTR(content, {B3_TOTAL_VOLUME_START}, {B3_TOTAL_VOLUME_LENGTH}) AS DOUBLE) / {B3_DECIMAL_SCALE} AS volume_total,
-                _ingested_at,
-                _source_file,
+                CAST(
+                    CAST(SUBSTR(content, {B3_OPEN_PRICE_START}, {B3_PRICE_LENGTH}) AS DECIMAL(18, 0)) * 0.01
+                    AS DECIMAL(18, 2)
+                ) AS preco_abertura,
+                CAST(
+                    CAST(SUBSTR(content, {B3_HIGH_PRICE_START}, {B3_PRICE_LENGTH}) AS DECIMAL(18, 0)) * 0.01
+                    AS DECIMAL(18, 2)
+                ) AS preco_maximo,
+                CAST(
+                    CAST(SUBSTR(content, {B3_LOW_PRICE_START}, {B3_PRICE_LENGTH}) AS DECIMAL(18, 0)) * 0.01
+                    AS DECIMAL(18, 2)
+                ) AS preco_minimo,
+                CAST(
+                    CAST(SUBSTR(content, {B3_CLOSE_PRICE_START}, {B3_PRICE_LENGTH}) AS DECIMAL(18, 0)) * 0.01
+                    AS DECIMAL(18, 2)
+                ) AS preco_fechamento,
+                CAST(
+                    CAST(SUBSTR(content, {B3_TOTAL_VOLUME_START}, {B3_TOTAL_VOLUME_LENGTH}) AS DECIMAL(18, 0)) * 0.01
+                    AS DECIMAL(18, 2)
+                ) AS volume_total,
+                _ingested_at AS _bronze_ingested_at,
+                _source_file AS _raw_source_file,
+                filename AS _bronze_source_file,
                 $dag_run_id AS _dag_run_id
-            FROM read_parquet($input_files, union_by_name = true, hive_partitioning = true)
+            FROM read_parquet(
+                $input_files,
+                union_by_name = true,
+                hive_partitioning = true,
+                filename = true
+            )
             WHERE SUBSTR(content, {B3_RECORD_TYPE_START}, {B3_RECORD_TYPE_LENGTH}) = '{B3_RECORD_TYPE_CODE}'
         )
         SELECT
@@ -143,13 +137,19 @@ COPY_QUERY = f"""
             preco_minimo,
             preco_fechamento,
             volume_total,
-            _ingested_at,
-            _source_file,
+            $ingestion_time AS _ingested_at,
+            _bronze_ingested_at,
+            _raw_source_file,
+            _bronze_source_file,
+            _bronze_source_file AS _source_file,
             _dag_run_id
         FROM parsed
         QUALIFY row_number() OVER (
             PARTITION BY ticker, data_pregao, tipo_mercado
-            ORDER BY _ingested_at DESC, _source_file DESC
+            ORDER BY
+                _bronze_ingested_at DESC,
+                _raw_source_file DESC,
+                _bronze_source_file DESC
         ) = 1
     ) TO $output_dir (
         FORMAT PARQUET,
@@ -258,6 +258,7 @@ def execute_silver_load(
                             "input_files": recent_parquets,
                             "output_dir": staging_dir,
                             "dag_run_id": dag_run_id,
+                            "ingestion_time": datetime.now(timezone.utc),
                         },
                     )
                 finally:

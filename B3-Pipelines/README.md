@@ -20,8 +20,10 @@ promover dados para consumo analítico.
 - Converte TXT para Parquet Bronze, acrescentando metadados de ingestão,
   arquivo-fonte, execução e ano.
 - Verifica a qualidade Bronze, incluindo chaves, preços e faixas de preço.
-- Transforma e deduplica as cotações Silver, atualizando apenas as partições
-  anuais solicitadas e preservando a saída anterior se a promoção falhar.
+- Transforma e deduplica as cotações Silver com valores financeiros
+  `DECIMAL(18, 2)`, metadados de ingestão Silver e linhagem dos arquivos RAW e
+  Parquet Bronze; atualiza apenas as partições anuais solicitadas e preserva a
+  saída anterior se a promoção falhar.
 - Processa anos de forma independente no Airflow; a falha em um ano não impede
   os outros anos do mapeamento de serem executados.
 - Mantém os dados do lake em arquivos no caminho configurado no host, visível
@@ -196,6 +198,7 @@ banco do Airflow entre reinicializações. `docker compose down` não o remove;
 
 - Docker Desktop com Docker Compose v2 e recursos suficientes para o período
   COTAHIST processado.
+- Python 3 no host para executar o launcher.
 - HD externo montado e acessível ao Docker Desktop/WSL.
 - Arquivos COTAHIST no padrão de diretórios e nomes mostrado acima.
 
@@ -246,6 +249,20 @@ um ambiente existente.
 
 ### Subir e conferir
 
+Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
+
+```sh
+./setup.sh
+```
+
+O launcher valida a configuração do Compose, constrói e inicia PostgreSQL,
+DuckDB/Quack e os serviços Airflow, aguarda o endpoint de saúde do Airflow e
+abre a página da DAG `b3_cotahist_medallion_pipeline` no navegador. Se o
+navegador não abrir automaticamente, acesse `http://localhost:8080` (ou a
+porta definida por `AIRFLOW_PORT`) e abra a DAG manualmente.
+
+Para iniciar a stack manualmente, use:
+
 ```sh
 docker compose config --quiet
 docker compose up --build -d
@@ -255,7 +272,11 @@ curl --fail http://localhost:8080/api/v2/monitor/health
 
 O Airflow fica disponível em `http://localhost:8080` (ou na porta definida por
 `AIRFLOW_PORT`). Entre com `AIRFLOW_ADMIN_USERNAME` e
-`AIRFLOW_ADMIN_PASSWORD`.
+`AIRFLOW_ADMIN_PASSWORD`. Para parar os serviços sem apagar os dados:
+
+```sh
+docker compose down
+```
 
 ### Operação e exemplos
 
@@ -311,14 +332,18 @@ python -m run_sql
 `python -m main` executa Bronze e Silver sequencialmente usando os padrões de
 `B3_START_YEAR`, `B3_END_YEAR` e dos limites, ou valores que você exportar no
 shell. `python -m run_sql` abre um REPL para consultar os Parquets. Para executar o
-Airflow standalone local, instale `python -m pip install -e '.[airflow]'` e
-rode `./start-airflow.sh`; esse modo usa DuckDB embutido. O Docker Compose é o
-caminho recomendado para validar a arquitetura com Quack.
+Airflow com DuckDB remoto, use `./setup.sh`. O Docker Compose é o caminho
+recomendado para executar a DAG e validar a arquitetura com Quack.
 
 ### Testes
 
+Instale as dependências de teste e execute a suíte com cobertura de todo o
+código Python em `src/`:
+
 ```sh
-python -m unittest discover -s tests -v
+python -m pip install -e '.[test]'
+PYTHONPATH=src coverage run -m unittest discover -s tests -t . -p 'test_*.py' -v
+coverage report --fail-under=100
 python -m compileall -q src airflow/dags duckdb-server
 ```
 
