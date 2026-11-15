@@ -43,6 +43,10 @@ promover dados para consumo analítico.
 - Não expõe Quack diretamente ao host nem configura TLS para a rede interna do
   Compose. Para acesso externo, é necessário um proxy reverso com TLS.
 
+Para detalhes de topologia, comunicação entre containers, autenticação,
+persistência e variáveis de ambiente, consulte
+[docs/infraestrutura.md](docs/infraestrutura.md).
+
 ## Fluxo funcional
 
 Para cada ano selecionado na execução manual:
@@ -60,10 +64,11 @@ implica por si só perda de desempenho: o que deve ser evitado para cargas
 grandes é materializar o conjunto inteiro no processo Python ou iterar
 registro a registro para transformar dados.
 
-## C4 Model
+## Visão arquitetural (C4)
 
-Os diagramas abaixo usam Mermaid `flowchart` para representar os níveis C1
-(contexto), C2 (containers) e C3 (componentes).
+Os diagramas Mermaid mostram o contexto (C1) e os containers (C2). A
+configuração detalhada da infraestrutura está em
+[docs/infraestrutura.md](docs/infraestrutura.md).
 
 ### C1 — Contexto do sistema
 
@@ -87,50 +92,27 @@ flowchart LR
 flowchart LR
     User["Pessoa engenheira de dados<br/>Navegador"]
     subgraph Docker["Docker Compose — rede privada airflow_network"]
-        API["Airflow API Server<br/>UI e API :8080"]
-        Scheduler["Airflow Scheduler<br/>LocalExecutor e tarefas"]
-        Processor["Airflow DAG Processor<br/>Importa e interpreta DAGs"]
+        Init["airflow-init<br/>Airflow 3.3.1<br/>migra o banco e cria usuário; execução única"]
+        API["airflow-api-server<br/>Airflow 3.3.1; UI/API :8080"]
+        Scheduler["airflow-scheduler<br/>Airflow 3.3.1; LocalExecutor e tarefas"]
+        Processor["airflow-dag-processor<br/>Airflow 3.3.1; importa DAGs"]
         DB[("PostgreSQL 15<br/>metadados Airflow")]
         Quack["DuckDB Server<br/>DuckDB 2.0 + Quack :9494"]
     end
-    Lake[("HD externo<br/>B3_DATA_LAKE_ROOT no host<br/>montado como /data-lake")]
+    Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake nos containers")]
 
-    User -->|"HTTP :8080"| API
-    API --> DB
-    Scheduler -->|"agenda tarefas"| DB
-    Processor -->|"publica metadados de DAG"| DB
-    Scheduler -->|"Python API + protocolo Quack"| Quack
-    Scheduler -->|"validação de arquivos RAW"| Lake
-    Quack -->|"lê TXT e Parquet;<br/>grava Parquet"| Lake
-```
-
-### C3 — Componentes principais
-
-```mermaid
-flowchart TB
-    subgraph Airflow["Container Airflow — Python 3.12 / Airflow 3.3"]
-        DAG["dag_historical_series<br/>mapeia execução por ano"]
-        RawDQ["validate_raw_quality<br/>largura e tipos COTAHIST"]
-        Bronze["execute_bronze_load<br/>monta SQL COPY para Bronze"]
-        BronzeDQ["validate_bronze_quality<br/>chaves e regras de preço"]
-        Silver["execute_silver_load<br/>SQL Silver e promoção por partição"]
-        Client["connect_duckdb / execute_query<br/>Python API e conexão Quack"]
-        DAG --> RawDQ --> Bronze --> BronzeDQ --> Silver
-        Bronze --> Client
-        BronzeDQ --> Client
-        Silver --> Client
-    end
-
-    subgraph DuckDB["Container DuckDB — DuckDB 2.0"]
-        Quack["Servidor Quack<br/>configuração global de memória e threads"]
-        Engine["Motor DuckDB<br/>CSV/TXT, SQL vetorizado e Parquet"]
-        Quack --> Engine
-    end
-
-    Shared[("Volume bind mount<br/>/data-lake")]
-    Client -->|"sessão remota autenticada"| Quack
-    RawDQ -->|"acesso ao arquivo RAW"| Shared
-    Engine -->|"scan e COPY"| Shared
+    User -->|"HTTP: ${AIRFLOW_PORT:-8080} -> :8080"| API
+    Init -->|"migrações e bootstrap"| DB
+    Init -.->|"conclusão necessária para iniciar"| API
+    Init -.-> Scheduler
+    Init -.-> Processor
+    API -->|"metadados e estado"| DB
+    Scheduler -->|"agenda tarefas e atualiza estado"| DB
+    Processor -->|"publica metadados das DAGs"| DB
+    Scheduler -->|"worker local: Execution API + JWT"| API
+    Scheduler -->|"Quack + QUACK_TOKEN"| Quack
+    Scheduler -.->|"valida RAW pelo bind mount"| Lake
+    Quack -.->|"lê TXT/Parquet e grava Parquet"| Lake
 ```
 
 ## Stack utilizada
@@ -194,6 +176,13 @@ banco do Airflow entre reinicializações. `docker compose down` não o remove;
 
 ## Setup
 
+Para configurar as variáveis e credenciais, entender a rede e os volumes, e
+operar os serviços, consulte os capítulos
+[`.env` e configuração](docs/infraestrutura.md#env-configuracao),
+[containers e rede](docs/infraestrutura.md#containers-rede),
+[volumes e persistência](docs/infraestrutura.md#volumes) e
+[autenticação](docs/infraestrutura.md#autenticacao).
+
 ### Requisitos
 
 - Docker Desktop com Docker Compose v2 e recursos suficientes para o período
@@ -203,6 +192,9 @@ banco do Airflow entre reinicializações. `docker compose down` não o remove;
 - Arquivos COTAHIST no padrão de diretórios e nomes mostrado acima.
 
 ### Configuração de ambiente
+
+O significado e o destino de cada variável estão em
+[`.env`: carregamento, variáveis e exemplos](docs/infraestrutura.md#env-configuracao).
 
 Dentro de `B3-Pipelines`, `.env` é local e não deve ser versionado:
 
@@ -257,6 +249,10 @@ banco. Faça a rotação do usuário no PostgreSQL antes de alterar esse valor e
 um ambiente existente.
 
 ### Subir e conferir
+
+Para detalhes de DNS, portas, dependências e saúde dos serviços, consulte
+[containers, rede e comunicação](docs/infraestrutura.md#containers-rede) e
+[operação e diagnóstico](docs/infraestrutura.md#operacao).
 
 Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
 
@@ -358,6 +354,8 @@ python -m compileall -q src airflow/dags duckdb-server
 
 ## Segurança e operação
 
+- A topologia, as credenciais e os limites entre serviços estão detalhados em
+  [Autenticação e limites de segurança](docs/infraestrutura.md#autenticacao).
 - A análise das decisões, diferenças entre a arquitetura anterior e a atual,
   relação com os recursos do DuckDB 2.0, validações e limites de performance
   está em [DuckDB Server e DuckDB 2.0](./docs/duckdb-server-2.0.md).

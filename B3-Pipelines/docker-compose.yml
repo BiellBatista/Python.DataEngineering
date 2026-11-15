@@ -6,7 +6,7 @@ x-airflow-environment: &airflow-environment
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?Set AIRFLOW__API_AUTH__JWT_SECRET in .env}
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}@postgres/airflow
   B3_DATA_LAKE_ROOT: /data-lake
-  DUCKDB_HOST: duckdb-server
+  DUCKDB_HOST: ${DUCKDB_HOST:-duckdb-server}
   DUCKDB_PORT: ${DUCKDB_PORT:-9494}
   QUACK_TOKEN: ${QUACK_TOKEN:?Set QUACK_TOKEN in .env}
   PYTHONPATH: /opt/airflow/src
@@ -52,6 +52,8 @@ services:
     build:
       context: .
       dockerfile: duckdb-server/Dockerfile
+      args:
+        DUCKDB_BASE_IMAGE: ${DUCKDB_BASE_IMAGE:-python:3.12-slim}
     environment:
       DUCKDB_HOST: 0.0.0.0
       DUCKDB_PORT: ${DUCKDB_PORT:-9494}
