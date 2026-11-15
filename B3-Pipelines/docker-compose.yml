@@ -2,6 +2,8 @@ x-airflow-environment: &airflow-environment
   AIRFLOW__CORE__EXECUTOR: LocalExecutor
   AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
   AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ${AIRFLOW__CORE__EXECUTION_API_SERVER_URL:-http://airflow-api-server:8080/execution/}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?Set AIRFLOW__API_AUTH__JWT_SECRET in .env}
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}@postgres/airflow
   B3_DATA_LAKE_ROOT: /data-lake
   DUCKDB_HOST: duckdb-server
@@ -14,6 +16,8 @@ x-airflow-common: &airflow-common
   build:
     context: .
     dockerfile: Dockerfile
+    args:
+      AIRFLOW_BASE_IMAGE: ${AIRFLOW_BASE_IMAGE:-apache/airflow:3.3.1-python3.12}
   env_file:
     - .env
   environment: *airflow-environment

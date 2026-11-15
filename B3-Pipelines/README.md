@@ -216,13 +216,20 @@ Configure `B3_DATA_LAKE_ROOT` com o caminho absoluto do HD externo visível ao
 Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL quando necessário
 (por exemplo, o resultado de `id -u`).
 
-Gere três valores aleatórios distintos para senhas e token; copie cada resultado
-para sua variável no `.env`, sem reutilizar o mesmo valor:
+`AIRFLOW_BASE_IMAGE` define a imagem base do Dockerfile do Airflow e é passada
+como argumento de build pelo Compose. Mantenha a versão compatível com a
+combinação testada de Airflow e Python. `AIRFLOW__CORE__EXECUTION_API_SERVER_URL`
+deve usar o nome do serviço na rede Docker (`airflow-api-server`), não
+`localhost`, para que o scheduler alcance a API de execução.
+
+Gere quatro valores aleatórios distintos para senhas, token e chave JWT; copie
+cada resultado para sua variável no `.env`, sem reutilizar o mesmo valor:
 
 ```sh
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+python3 -c "import secrets; print(secrets.token_urlsafe(64))"
 ```
 
 Preencha:
@@ -232,11 +239,13 @@ AIRFLOW_DB_PASSWORD=<primeiro valor>
 AIRFLOW_ADMIN_USERNAME=admin
 AIRFLOW_ADMIN_PASSWORD=<segundo valor>
 QUACK_TOKEN=<terceiro valor>
+AIRFLOW__API_AUTH__JWT_SECRET=<quarto valor>
 ```
 
 `AIRFLOW_DB_PASSWORD` deve permanecer compatível com URL. Os valores gerados
-por `token_urlsafe` atendem a esse requisito. Restrinja as permissões do
-arquivo local:
+por `token_urlsafe` atendem a esse requisito. A chave JWT precisa ser idêntica
+no scheduler e no API server para autenticar as tasks. Restrinja as permissões
+do arquivo local:
 
 ```sh
 chmod 600 .env
