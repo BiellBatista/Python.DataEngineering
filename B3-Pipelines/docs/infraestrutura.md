@@ -20,9 +20,9 @@ por `B3_DATA_LAKE_ROOT`; não são copiados para as imagens.
 %%{init: {"flowchart": {"curve": "basis"}}}%%
 flowchart LR
     Operator["Operador<br/>Navegador"]
-    Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake")]
+    Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake nos containers Airflow e DuckDB")]
 
-    subgraph Docker["Docker Compose — airflow_network (bridge privada)"]
+    subgraph Docker["Docker Compose — airflow_network (bridge do projeto)"]
         Init["airflow-init<br/>Migra o banco e cria o usuário<br/>execução única"]
         API["airflow-api-server<br/>UI/API :8080"]
         Scheduler["airflow-scheduler<br/>LocalExecutor + workers locais"]
@@ -41,21 +41,29 @@ flowchart LR
     Processor -->|"publica metadados das DAGs"| Postgres
     Scheduler -->|"Execution API interna + JWT"| API
     Scheduler -->|"Quack + QUACK_TOKEN"| DuckDB
-    Lake -.->|"bind mount /data-lake"| Scheduler
-    Lake -.->|"bind mount /data-lake"| DuckDB
+    Lake -.->|"validação RAW"| Scheduler
+    Lake -.->|"leitura e escrita Parquet"| DuckDB
 ```
 
 Todos os containers Compose usam a rede `airflow_network` e se encontram pelos
 nomes de serviço. A porta da UI é publicada no host como `${AIRFLOW_PORT:-8080}`
 e encaminhada para `8080` no API server. PostgreSQL (`5432`) e DuckDB/Quack
 (`DUCKDB_PORT`, padrão `9494`) não são publicados no host; Quack é apenas
-exposto à rede interna.
+exposto à rede do projeto.
+
+O mapeamento atual do API server não fixa um endereço IP no host; por isso, o
+Docker pode publicá-lo em todas as interfaces, não somente em `localhost`. A
+UI usa HTTP sem TLS. Restrinja o acesso com firewall ou, se a UI for somente
+local, altere o mapeamento para
+`127.0.0.1:${AIRFLOW_PORT:-8080}:8080`.
+
+`airflow_network` é uma bridge padrão, não uma rede com saída bloqueada. Em
+uma instalação sem cache da extensão, `duckdb-server` precisa de acesso de
+saída para executar `INSTALL quack` durante a inicialização.
 
 O `LocalExecutor` executa os processos worker no próprio container
 `airflow-scheduler`; não há um serviço worker separado. `airflow-init` migra o
-banco e cria o usuário inicial, depois encerra. API server e scheduler esperam
-essa inicialização, PostgreSQL saudável e DuckDB saudável; o DAG processor
-espera a inicialização e PostgreSQL saudável.
+banco e cria o usuário inicial, depois encerra.
 
 | Serviço | Responsabilidade e conteúdo |
 |---|---|
@@ -65,6 +73,18 @@ espera a inicialização e PostgreSQL saudável.
 | `airflow-dag-processor` | Airflow 3.3.1; lê DAGs do bind mount `/opt/airflow/dags` e publica seus metadados. |
 | `postgres` | PostgreSQL 15; metadados e estado do Airflow, persistidos em `postgres-db-volume`. |
 | `duckdb-server` | Python 3.12, DuckDB 2.0 e Quack; executa SQL/I/O analítico na porta interna `DUCKDB_PORT`. |
+
+### Healthchecks e dependências de inicialização
+
+| Serviço | Verificação |
+|---|---|
+| `postgres` | `pg_isready` verifica se o banco aceita conexões. |
+| `duckdb-server` | Testa uma conexão TCP à porta local; não executa uma consulta nem valida `QUACK_TOKEN`. |
+| `airflow-api-server` | Não tem `healthcheck` no Compose. `setup/start.py` consulta `/api/v2/monitor/health` por até 300 segundos. |
+
+O API server e o scheduler esperam o `airflow-init` concluir, PostgreSQL ficar
+saudável e DuckDB aceitar conexões. O DAG processor espera a conclusão do
+`airflow-init` e PostgreSQL saudável.
 
 ### DNS e endereços internos
 
@@ -90,7 +110,8 @@ data lake não é copiado para dentro da imagem.
 
 `docker compose down` preserva o volume nomeado. `docker compose down -v`
 remove volumes nomeados e apaga o banco de metadados persistido; não use essa
-opção se quiser manter o histórico do Airflow.
+opção se quiser manter o histórico do Airflow. O data lake é um bind mount do
+host e não é apagado por `down -v`.
 
 <a id="env-configuracao"></a>
 ## `.env`: carregamento, variáveis e exemplos
@@ -98,7 +119,8 @@ opção se quiser manter o histórico do Airflow.
 ### Como os valores chegam aos serviços
 
 1. O Docker Compose carrega `.env` para interpolar `${VAR}` em
-   [docker-compose.yml](../docker-compose.yml).
+   [docker-compose.yml](../docker-compose.yml). Variáveis exportadas no shell
+   têm precedência sobre as do `.env`.
 2. `env_file: .env` também injeta as variáveis no ambiente dos serviços Airflow.
 3. Quando uma chave aparece em `env_file` e em `environment`, o valor explícito
    de `environment` prevalece. Por exemplo, o caminho do host
@@ -118,6 +140,7 @@ flowchart LR
     Compose -->|"env_file + environment"| Airflow["Containers Airflow"]
     Compose -->|"environment explícito"| DataServices["PostgreSQL e DuckDB"]
     Compose -->|"ports, network e volumes"| Runtime["Stack em execução"]
+    Images --> Runtime
 ```
 
 Use `.env.example` como modelo, mantenha `.env` local e fora do Git, gere
@@ -139,7 +162,7 @@ credenciais neste documento ou no `.env.example`.
 | Variável | Consumidor | Significado e exemplo |
 |---|---|---|
 | `AIRFLOW_UID` | Compose: `user` dos containers Airflow e DuckDB | UID numérico do processo para compatibilidade de permissões nos arquivos do host; exemplo `1000`. |
-| `AIRFLOW_PORT` | Compose: publicação do API server | Porta do host que encaminha para `8080` no container; exemplo `8080`. Não altera a porta interna. |
+| `AIRFLOW_PORT` | Compose e `setup/start.py` | Porta do host que encaminha para `8080` no container; exemplo `8080`. Não altera a porta interna. A publicação atual não é limitada ao loopback. Variável exportada no shell tem precedência sobre `.env`. |
 | `AIRFLOW_BASE_IMAGE` | `build.args` -> [Dockerfile](../Dockerfile) | Imagem base do Airflow; exemplo `apache/airflow:3.3.1-python3.12`. Deve manter a versão de Python/Airflow testada pelo projeto. |
 | `DUCKDB_BASE_IMAGE` | `build.args` -> [DuckDB Dockerfile](../duckdb-server/Dockerfile) | Imagem base Python do servidor DuckDB; exemplo `python:3.12-slim`. |
 | `AIRFLOW__CORE__EXECUTION_API_SERVER_URL` | API server, scheduler e demais containers Airflow | URL interna de execução; exemplo `http://airflow-api-server:8080/execution/`. Use DNS do serviço, nunca `localhost` no scheduler. |
@@ -186,9 +209,15 @@ com `AIRFLOW_DB_PASSWORD`, `PYTHONPATH=/opt/airflow/src` e
 
 O Quack está configurado com TLS desabilitado. O token autentica o cliente, mas
 não criptografa a conexão nem restringe o SQL que um cliente autorizado pode
-executar. A configuração pressupõe a rede interna do Compose; não publique a
-porta 9494 nem exponha Quack diretamente à Internet. Para acesso externo, use
-um proxy com TLS e controles de acesso apropriados.
+executar. A configuração pressupõe acesso apenas pelos containers da rede
+`airflow_network`; não publique a porta 9494 nem exponha Quack diretamente à
+Internet. Para acesso externo, use um proxy com TLS e controles de acesso
+apropriados.
+
+No código, `quack_serve` usa `disable_ssl=true` e
+`allow_other_hostname=true`; este último permite hostnames não locais, como o
+DNS Compose `duckdb-server`. São opções fixas do servidor, não variáveis do
+`.env`.
 
 Os logs de task ficam em `/opt/airflow/logs` dentro do container que executa o
 worker. Como esse caminho não tem volume persistente no Compose, a recriação do
@@ -232,13 +261,14 @@ tentativa; verifique a exceção original nos logs do scheduler. Em particular:
   etapas seguintes daquele ano; outros anos mapeados podem continuar.
 
 Se alterar a imagem base, reconstrua com `docker compose up --build -d`. Para
-aplicar alterações de autenticação ou de URL do Airflow sem mexer nos outros
-serviços:
+aplicar mudanças no endpoint/JWT do Airflow, no token ou nos parâmetros do
+DuckDB, recrie os consumidores Airflow e o servidor DuckDB:
 
 ```sh
-docker compose up -d --force-recreate airflow-api-server airflow-scheduler
+docker compose up -d --force-recreate \
+  airflow-api-server airflow-scheduler airflow-dag-processor duckdb-server
 ```
 
-Para mudanças em limites ou token Quack, recrie também o serviço
-`duckdb-server`. O launcher automatizado da infraestrutura está em
+O token Quack precisa continuar igual no servidor e nos clientes. O launcher
+automatizado da infraestrutura está em
 [setup/start.py](../setup/start.py).

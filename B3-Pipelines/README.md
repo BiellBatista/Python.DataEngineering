@@ -4,8 +4,9 @@
 
 Pipeline ELT para a série histórica de cotações da B3 no layout COTAHIST. O
 Airflow orquestra o fluxo e o DuckDB processa os arquivos e grava os resultados
-em Parquet. Em Docker Compose, Airflow e DuckDB executam em serviços separados
-e se comunicam pelo protocolo remoto Quack.
+em Parquet. No Docker Compose, o Airflow usa serviços para API/UI, scheduler,
+DAG processor e inicialização do banco/usuário; DuckDB/Quack executa em serviço
+separado e atende as consultas remotas.
 
 ## Objetivo
 
@@ -16,10 +17,14 @@ promover dados para consumo analítico.
 ## O que faz
 
 - Valida os arquivos RAW anuais: existência, linhas de 245 bytes e tipos de
-  registro COTAHIST aceitos.
+  registro COTAHIST aceitos: header (`00`), negociação (`01`) e trailer (`99`).
 - Converte TXT para Parquet Bronze, acrescentando metadados de ingestão,
   arquivo-fonte, execução e ano.
-- Verifica a qualidade Bronze, incluindo chaves, preços e faixas de preço.
+- Verifica a qualidade Bronze nos Parquets da ingestão mais recente de cada
+  ano, incluindo chaves, preços e faixas. Registros do mercado fracionário
+  (`020`) com os quatro preços zerados são aceitos como preços não informados.
+  O campo `preco_fechamento` corresponde ao `PREULT` do layout da B3 (último
+  negócio), não ao preço oficial de fechamento do pregão.
 - Transforma e deduplica as cotações Silver com valores financeiros
   `DECIMAL(18, 2)`, metadados de ingestão Silver e linhagem dos arquivos RAW e
   Parquet Bronze; atualiza apenas as partições anuais solicitadas e preserva a
@@ -27,7 +32,7 @@ promover dados para consumo analítico.
 - Processa anos de forma independente no Airflow; a falha em um ano não impede
   os outros anos do mapeamento de serem executados.
 - Mantém os dados do lake em arquivos no caminho configurado no host, visível
-  aos dois serviços Docker como `/data-lake`.
+  aos containers Airflow e DuckDB como `/data-lake`.
 
 ## O que não faz
 
@@ -37,11 +42,12 @@ promover dados para consumo analítico.
   metadados e o estado do Airflow.
 - Não fornece dashboard de negócio, API analítica, catálogo de dados ou camada
   Gold.
-- Não inicia ingestões agendadas: a DAG é manual (`schedule=None`).
+- Não inicia ingestões agendadas: a DAG é manual (`schedule=None`) e permite
+  somente uma execução ativa por vez.
 - Não é um cluster distribuído ou de alta disponibilidade. O Compose usa
   `LocalExecutor` e um único servidor DuckDB/Quack.
-- Não expõe Quack diretamente ao host nem configura TLS para a rede interna do
-  Compose. Para acesso externo, é necessário um proxy reverso com TLS.
+- Não publica Quack no host nem configura TLS para as conexões Quack na rede
+  Docker. Para acesso remoto, é necessário um proxy reverso com TLS.
 
 Para detalhes de topologia, comunicação entre containers, autenticação,
 persistência e variáveis de ambiente, consulte
@@ -53,9 +59,14 @@ Para cada ano selecionado na execução manual:
 
 1. Airflow valida o COTAHIST RAW no volume compartilhado.
 2. O worker solicita ao DuckDB remoto a leitura do TXT e a gravação Bronze.
-3. Airflow valida os Parquets Bronze mais recentes daquele ano.
+3. Airflow valida somente os Parquets da ingestão Bronze mais recente daquele
+   ano.
 4. DuckDB lê Bronze, transforma, deduplica e grava Silver em staging.
 5. O worker promove somente a partição Silver do ano após a escrita concluir.
+
+A DAG permite uma execução ativa por vez. As tasks têm uma nova tentativa
+após três minutos; falhas de Data Quality são levantadas como falha explícita
+e não são repetidas.
 
 As transformações, filtros, agregações e escritas Parquet são executados pelo
 motor DuckDB; Python controla conexões e fluxo. A validação RAW percorre as
@@ -91,7 +102,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     User["Pessoa engenheira de dados<br/>Navegador"]
-    subgraph Docker["Docker Compose — rede privada airflow_network"]
+    subgraph Docker["Docker Compose — rede bridge airflow_network"]
         Init["airflow-init<br/>Airflow 3.3.1<br/>migra o banco e cria usuário; execução única"]
         API["airflow-api-server<br/>Airflow 3.3.1; UI/API :8080"]
         Scheduler["airflow-scheduler<br/>Airflow 3.3.1; LocalExecutor e tarefas"]
@@ -141,10 +152,10 @@ Desktop.
 
 ## Data lake
 
-O caminho no host é definido em `B3_DATA_LAKE_ROOT`. A configuração atual do
-ambiente local aponta para `/mnt/d/b3_datalake`. O mesmo diretório do host é
-montado nos containers Airflow e DuckDB como `/data-lake`, portanto não existe
-cópia intermediária do dataset para o filesystem efêmero dos containers.
+O caminho no host é definido em `B3_DATA_LAKE_ROOT`. No Compose, esse diretório
+é montado nos containers Airflow e DuckDB como `/data-lake`, portanto não
+existe cópia intermediária do dataset para o filesystem efêmero dos containers.
+Fora do Compose, o padrão de `src/config.py` é `/mnt/d/b3_datalake`.
 
 ```text
 <B3_DATA_LAKE_ROOT>/
@@ -185,8 +196,8 @@ operar os serviços, consulte os capítulos
 
 ### Requisitos
 
-- Docker Desktop com Docker Compose v2 e recursos suficientes para o período
-  COTAHIST processado.
+- Docker Engine ou Docker Desktop com Docker Compose v2 e recursos suficientes
+  para o período COTAHIST processado.
 - Python 3 no host para executar o launcher.
 - HD externo montado e acessível ao Docker Desktop/WSL.
 - Arquivos COTAHIST no padrão de diretórios e nomes mostrado acima.
@@ -208,11 +219,14 @@ Configure `B3_DATA_LAKE_ROOT` com o caminho absoluto do HD externo visível ao
 Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL quando necessário
 (por exemplo, o resultado de `id -u`).
 
-`AIRFLOW_BASE_IMAGE` define a imagem base do Dockerfile do Airflow e é passada
-como argumento de build pelo Compose. Mantenha a versão compatível com a
-combinação testada de Airflow e Python. `AIRFLOW__CORE__EXECUTION_API_SERVER_URL`
-deve usar o nome do serviço na rede Docker (`airflow-api-server`), não
-`localhost`, para que o scheduler alcance a API de execução.
+`AIRFLOW_BASE_IMAGE` e `DUCKDB_BASE_IMAGE` definem as imagens base dos
+Dockerfiles correspondentes e são passadas como argumentos de build pelo
+Compose. Mantenha versões compatíveis com a combinação testada.
+`AIRFLOW__CORE__EXECUTION_API_SERVER_URL` deve usar o nome do serviço na rede
+Docker (`airflow-api-server`), não `localhost`, para que o scheduler alcance a
+API de execução.
+Se `AIRFLOW_PORT` estiver exportada no shell que inicia o launcher, ela
+prevalece sobre o valor do `.env`.
 
 Gere quatro valores aleatórios distintos para senhas, token e chave JWT; copie
 cada resultado para sua variável no `.env`, sem reutilizar o mesmo valor:
@@ -272,6 +286,7 @@ Para iniciar a stack manualmente, use:
 docker compose config --quiet
 docker compose up --build -d
 docker compose ps
+# Substitua 8080 pelo AIRFLOW_PORT se ele foi personalizado.
 curl --fail http://localhost:8080/api/v2/monitor/health
 ```
 
@@ -304,8 +319,9 @@ docker compose down
 ```
 
 Na UI, abra `b3_cotahist_medallion_pipeline` e inicie uma execução manual.
-Informe `start_year` e `end_year`; `memory_limit` e `threads` devem corresponder
-a `DUCKDB_MEMORY_LIMIT` e `DUCKDB_THREADS` do `.env`, pois são configurações
+Informe `start_year` e `end_year` (inclusive, entre 1986 e 2030, com o inicial
+menor ou igual ao final); `memory_limit` e `threads` devem corresponder a
+`DUCKDB_MEMORY_LIMIT` e `DUCKDB_THREADS` do `.env`, pois são configurações
 globais do servidor compartilhado.
 
 Para inspecionar diretamente a camada Silver com o cliente Python no container:
@@ -328,6 +344,7 @@ Para desenvolvimento sem Quack, DuckDB usa uma conexão embutida quando
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+# Ajuste para o caminho absoluto do data lake no seu host.
 export B3_DATA_LAKE_ROOT=/mnt/d/b3_datalake
 unset DUCKDB_HOST
 python -m main
@@ -356,6 +373,8 @@ python -m compileall -q src airflow/dags duckdb-server
 
 - A topologia, as credenciais e os limites entre serviços estão detalhados em
   [Autenticação e limites de segurança](docs/infraestrutura.md#autenticacao).
+- O mapeamento atual da porta Airflow não restringe o bind ao loopback; proteja
+  o acesso com firewall ou restrinja o bind se a UI for somente local.
 - A análise das decisões, diferenças entre a arquitetura anterior e a atual,
   relação com os recursos do DuckDB 2.0, validações e limites de performance
   está em [DuckDB Server e DuckDB 2.0](./docs/duckdb-server-2.0.md).
@@ -364,8 +383,8 @@ python -m compileall -q src airflow/dags duckdb-server
   [Hipóteses de melhorias futuras](./docs/hipoteses-melhorias-performance.md).
 - `.env` contém credenciais locais e está ignorado pelo Git; não publique seus
   valores.
-- Quack usa token e tráfego sem TLS apenas na rede privada do Compose. A porta
-  `9494` é interna e não é publicada no host.
+- Quack autentica com token, mas as conexões não usam TLS. A porta `9494` não
+  é publicada no host; a rede bridge também permite saída dos containers.
 - Não exponha essa rede ou o serviço DuckDB diretamente. Para acesso externo,
   use um proxy reverso com TLS e aplique as recomendações da
   [documentação de segurança Quack](https://duckdb.org/docs/2.0/quack/security)
