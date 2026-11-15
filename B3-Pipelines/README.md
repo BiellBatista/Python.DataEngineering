@@ -228,7 +228,7 @@ Para detalhes de DNS, portas, dependências e saúde dos serviços, consulte
 Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
 
 ```sh
-./setup.sh
+./start.sh
 ```
 
 O launcher valida a configuração do Compose, constrói e inicia PostgreSQL,
@@ -250,10 +250,11 @@ curl --fail http://localhost:8080/api/v2/monitor/health
 
 O Airflow fica disponível em `http://localhost:8080` (ou na porta definida por
 `AIRFLOW_PORT`). Entre com `AIRFLOW_ADMIN_USERNAME` e
-`AIRFLOW_ADMIN_PASSWORD`. Para parar os serviços sem apagar os dados:
+`AIRFLOW_ADMIN_PASSWORD`. Para parar os serviços sem apagar os dados, execute
+na pasta `B3-Pipelines`:
 
 ```sh
-docker compose down
+./stop.sh
 ```
 
 ### Operação e exemplos
@@ -273,7 +274,7 @@ docker compose exec airflow-dag-processor \
 docker compose exec airflow-api-server airflow users list
 
 # Parar os serviços mantendo os dados persistentes
-docker compose down
+./stop.sh
 ```
 
 Para executar uma DAG, consulte os parâmetros, pré-requisitos e passos de
