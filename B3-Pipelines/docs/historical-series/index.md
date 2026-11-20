@@ -62,7 +62,7 @@ No Compose, `/data-lake` corresponde ao diretório do host configurado por
 ```text
 /data-lake/
 ├── raw/cotahist/ano=AAAA/COTAHIST_A{AAAA}.TXT
-├── bronze/cotahist/year=AAAA/_ingested_date=<timestamp>/*.parquet
+├── bronze/cotacoes_historicas/year=AAAA/_ingested_date=<timestamp>/*.parquet
 └── silver/cotacoes_historicas/year=AAAA/*.parquet
 ```
 
@@ -155,5 +155,7 @@ flowchart LR
 | [Diagrama de sequência](diagrama-sequencia.md) | Mensagens entre operador, Airflow, worker, DuckDB e Data Lake. |
 
 Para setup e operação dos serviços compartilhados, consulte também
-[infraestrutura](../infraestrutura.md). A visão geral da plataforma está no
+[infraestrutura](../infraestrutura.md) e a documentação de
+[observabilidade](../observabilidade.md), que explica como consultar logs,
+métricas e traces. A visão geral da plataforma está no
 [README](../../README.md).

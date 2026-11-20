@@ -33,7 +33,7 @@ em Docker, o valor do host depende do `.env`.
 - Metadados: `_ingested_at`, `_source_file`, `_dag_run_id`, `year` e
   `_ingested_date`.
 - Particionamento:
-  `/data-lake/bronze/cotahist/year=AAAA/_ingested_date=<timestamp>/`.
+  `/data-lake/bronze/cotacoes_historicas/year=AAAA/_ingested_date=<timestamp>/`.
 - Compressão ZSTD; row group de 122.880 linhas.
 
 ### Silver

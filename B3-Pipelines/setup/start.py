@@ -14,26 +14,29 @@ STARTUP_TIMEOUT_SECONDS = 300
 AIRFLOW_DAG_ID = "b3_cotahist_medallion_pipeline"
 
 
-def configured_airflow_port() -> int:
-    port = os.environ.get("AIRFLOW_PORT")
+def configured_port(environment_variable: str, default: int) -> int:
+    port = os.environ.get(environment_variable)
     if port is None:
         env_file = PROJECT_ROOT / ".env"
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == "AIRFLOW_PORT":
-                port = value.strip().strip("\"'")
-                break
+        if env_file.is_file():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if separator and key.strip() == environment_variable:
+                    port = value.strip().strip("\"'")
+                    break
 
     if not port:
-        return 8080
+        return default
 
     try:
         parsed_port = int(port)
     except ValueError as error:
-        raise ValueError("AIRFLOW_PORT deve ser um número entre 1 e 65535.") from error
+        raise ValueError(
+            f"{environment_variable} deve ser um número entre 1 e 65535."
+        ) from error
 
     if not 1 <= parsed_port <= 65535:
-        raise ValueError("AIRFLOW_PORT deve ser um número entre 1 e 65535.")
+        raise ValueError(f"{environment_variable} deve ser um número entre 1 e 65535.")
     return parsed_port
 
 
@@ -81,22 +84,23 @@ def main() -> int:
         return 1
 
     try:
-        port = configured_airflow_port()
+        airflow_port = configured_port("AIRFLOW_PORT", 8080)
+        grafana_port = configured_port("GRAFANA_PORT", 3000)
         run_compose("config", "--quiet")
         run_compose("up", "--build", "-d")
 
-        airflow_url = f"http://localhost:{port}"
+        airflow_url = f"http://localhost:{airflow_port}"
         health_url = f"{airflow_url}/api/v2/monitor/health"
         print("Aguardando o Airflow ficar saudável...", flush=True)
         wait_for_airflow(health_url)
 
         dag_url = f"{airflow_url}/dags/{AIRFLOW_DAG_ID}"
-        print(f"Airflow disponível. Abrindo a pipeline: {dag_url}", flush=True)
-        import webbrowser
-
-        if not webbrowser.open(dag_url, new=2):
-            print("Não foi possível abrir o navegador automaticamente.")
-            print(f"Acesse manualmente: {dag_url}")
+        grafana_url = f"http://localhost:{grafana_port}"
+        print("Ambiente disponível. Acesse as ferramentas:", flush=True)
+        print(f"  Airflow: {airflow_url}", flush=True)
+        print(f"  Pipeline COTAHIST: {dag_url}", flush=True)
+        print(f"  Grafana (métricas, logs e traces): {grafana_url}", flush=True)
+        print(f"  Grafana Explore: {grafana_url}/explore", flush=True)
         return 0
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Erro ao iniciar o ambiente: {error}", file=sys.stderr)

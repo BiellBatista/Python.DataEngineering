@@ -11,7 +11,7 @@ RAW_COTAHIST_DIR = os.getenv(
 )
 BRONZE_COTAHIST_DIR = os.getenv(
     "B3_BRONZE_COTAHIST_DIR",
-    str(DATA_LAKE_ROOT / "bronze" / "cotahist"),
+    str(DATA_LAKE_ROOT / "bronze" / "cotacoes_historicas"),
 )
 SILVER_COTAHIST_DIR = os.getenv(
     "B3_SILVER_COTAHIST_DIR",

@@ -9,9 +9,10 @@ Os valores de referência sem credenciais estão em [.env.example](../.env.examp
 
 ## Visão geral
 
-O Docker Compose inicia o Airflow, o PostgreSQL de metadados e um servidor
-DuckDB/Quack. Os arquivos de cotação permanecem no diretório do host definido
-por `B3_DATA_LAKE_ROOT`; não são copiados para as imagens.
+O Docker Compose inicia o Airflow, o PostgreSQL de metadados, o servidor
+DuckDB/Quack e os serviços locais de observabilidade. Os arquivos de cotação
+permanecem no diretório do host definido por `B3_DATA_LAKE_ROOT`; não são
+copiados para as imagens.
 
 <a id="containers-rede"></a>
 ## Containers, rede e comunicação
@@ -29,6 +30,9 @@ flowchart LR
         Processor["airflow-dag-processor<br/>Importa e processa DAGs"]
         Postgres[("postgres<br/>PostgreSQL 15")]
         DuckDB["duckdb-server<br/>DuckDB 2.0 + Quack :9494"]
+        LGTM["otel-lgtm<br/>Grafana + Loki + Tempo + Prometheus + OTel Collector"]
+        CAdvisor["cadvisor<br/>métricas de contêineres :8080 interno"]
+        Alloy["alloy<br/>logs Docker/task -> Loki"]
     end
 
     Operator -->|"HTTP: AIRFLOW_PORT -> 8080"| API
@@ -41,6 +45,11 @@ flowchart LR
     Processor -->|"publica metadados das DAGs"| Postgres
     Scheduler -->|"Execution API interna + JWT"| API
     Scheduler -->|"Quack + QUACK_TOKEN"| DuckDB
+    API -.->|"OTLP HTTP :4318"| LGTM
+    Scheduler -.->|"OTLP HTTP :4318"| LGTM
+    Processor -.->|"OTLP HTTP :4318"| LGTM
+    CAdvisor -->|"scrape Prometheus :8080 a cada 5s"| LGTM
+    Alloy -->|"Docker API + arquivos Airflow; push Loki :3100"| LGTM
     Lake -.->|"validação RAW"| Scheduler
     Lake -.->|"leitura e escrita Parquet"| DuckDB
 ```
@@ -72,7 +81,10 @@ banco e cria o usuário inicial, depois encerra.
 | `airflow-scheduler` | Airflow 3.3.1 com `LocalExecutor`; agenda tasks e inicia workers locais. |
 | `airflow-dag-processor` | Airflow 3.3.1; lê DAGs do bind mount `/opt/airflow/dags` e publica seus metadados. |
 | `postgres` | PostgreSQL 15; metadados e estado do Airflow, persistidos em `postgres-db-volume`. |
-| `duckdb-server` | Python 3.12, DuckDB 2.0 e Quack; executa SQL/I/O analítico na porta interna `DUCKDB_PORT`. |
+| `duckdb-server` | Python 3.15, DuckDB 2.0 e Quack; executa SQL/I/O analítico na porta interna `DUCKDB_PORT`. |
+| `otel-lgtm` | Imagem `grafana/otel-lgtm:0.41.1`; Grafana, OpenTelemetry Collector, Prometheus, Loki, Tempo e Pyroscope. Grafana publicado em `GRAFANA_PORT`; OTLP/Loki ficam internos à rede Compose. |
+| `cadvisor` | Imagem `gcr.io/cadvisor/cadvisor:v0.55.1`; coleta métricas de CPU, memória, disco e rede dos containers/cgroups; endpoint `8080` somente interno, sem conflito com Airflow. No Docker Desktop, CPU/memória/disco são identificados pelo ID do cgroup, sem label de serviço; rede é agregada no host/VM. |
+| `alloy` | Imagem `grafana/alloy:v1.22.0`; descobre containers pela Docker Engine API e lê logs de tasks no volume compartilhado do Airflow; envia eventos ao Loki. O socket Docker requer acesso altamente privilegiado. |
 
 ### Healthchecks e dependências de inicialização
 
@@ -80,11 +92,13 @@ banco e cria o usuário inicial, depois encerra.
 |---|---|
 | `postgres` | `pg_isready` verifica se o banco aceita conexões. |
 | `duckdb-server` | Testa uma conexão TCP à porta local; não executa uma consulta nem valida `QUACK_TOKEN`. |
+| `otel-lgtm` | Healthcheck fornecido pela imagem; os serviços Airflow e `alloy` aguardam sua condição `healthy`. |
 | `airflow-api-server` | Não tem `healthcheck` no Compose. `setup/start.py` consulta `/api/v2/monitor/health` por até 300 segundos. |
 
-O API server e o scheduler esperam o `airflow-init` concluir, PostgreSQL ficar
-saudável e DuckDB aceitar conexões. O DAG processor espera a conclusão do
-`airflow-init` e PostgreSQL saudável.
+O API server e o scheduler esperam o `airflow-init` concluir, PostgreSQL e
+`otel-lgtm` ficarem saudáveis e DuckDB aceitar conexões. O DAG processor espera
+a conclusão do `airflow-init` e PostgreSQL e `otel-lgtm` saudáveis. O serviço
+`alloy` também espera o `otel-lgtm` ficar saudável.
 
 ### DNS e endereços internos
 
@@ -102,7 +116,9 @@ Quack escutar nas interfaces do container.
 | `${B3_DATA_LAKE_ROOT}` no host | `/data-lake` | Todos os containers Airflow e `duckdb-server` | Persistente no host, independente do ciclo de vida dos containers. |
 | `./airflow/dags` | `/opt/airflow/dags` | Containers Airflow | Bind mount; alterações de DAG ficam visíveis sem rebuild. |
 | Volume nomeado `postgres-db-volume` | `/var/lib/postgresql/data` | PostgreSQL | Persiste metadados entre reinicializações. |
-| `/opt/airflow/logs` | Sem bind mount definido | Scheduler/worker | Logs locais ao container; podem ser perdidos ao recriá-lo. |
+| Volume nomeado `observability-data` | `/data` | `otel-lgtm` | Persiste os dados locais de métricas, logs, traces e Grafana. |
+| Volume nomeado `airflow-task-logs` | `/opt/airflow/logs` | Serviços Airflow e `alloy` (somente leitura) | Compartilha e persiste os logs de tasks para consulta no Loki. |
+| Volume nomeado `alloy-data` | `/var/lib/alloy/data` | `alloy` | Preserva posições de leitura e estado local do Alloy. |
 
 O código em `src/` é copiado e instalado durante o build das imagens. Alterações
 nesse código exigem rebuild. O diretório de DAGs é montado separadamente; o
@@ -163,8 +179,9 @@ credenciais neste documento ou no `.env.example`.
 |---|---|---|
 | `AIRFLOW_UID` | Compose: `user` dos containers Airflow e DuckDB | UID numérico do processo para compatibilidade de permissões nos arquivos do host; exemplo `1000`. |
 | `AIRFLOW_PORT` | Compose e `setup/start.py` | Porta do host que encaminha para `8080` no container; exemplo `8080`. Não altera a porta interna. A publicação atual não é limitada ao loopback. Variável exportada no shell tem precedência sobre `.env`. |
+| `GRAFANA_PORT` | Compose | Porta local do host para a interface Grafana; padrão `3000`, vinculada a `127.0.0.1`. Não afeta a porta `8080` do Airflow. |
 | `AIRFLOW_BASE_IMAGE` | `build.args` -> [Dockerfile](../Dockerfile) | Imagem base do Airflow; exemplo `apache/airflow:3.3.1-python3.12`. Deve manter a versão de Python/Airflow testada pelo projeto. |
-| `DUCKDB_BASE_IMAGE` | `build.args` -> [DuckDB Dockerfile](../duckdb-server/Dockerfile) | Imagem base Python do servidor DuckDB; exemplo `python:3.12-slim`. |
+| `DUCKDB_BASE_IMAGE` | `build.args` -> [DuckDB Dockerfile](../duckdb-server/Dockerfile) | Imagem base Python do servidor DuckDB; padrão `python:3.15-slim`. Airflow permanece em Python 3.12, conforme a imagem e constraints do Airflow 3.3.1 usadas pelo projeto. |
 | `AIRFLOW__CORE__EXECUTION_API_SERVER_URL` | API server, scheduler e demais containers Airflow | URL interna de execução; exemplo `http://airflow-api-server:8080/execution/`. Use DNS do serviço, nunca `localhost` no scheduler. |
 | `AIRFLOW__API_AUTH__JWT_SECRET` | Componentes Airflow que assinam/verificam tokens | Chave aleatória compartilhada para os JWTs internos. Precisa ser idêntica no scheduler e no API server. |
 | `AIRFLOW_DB_PASSWORD` | PostgreSQL, inicialização e connection string Airflow | Senha do usuário `airflow`; use valor URL-safe. Alterá-la no `.env` não troca a senha já persistida no volume PostgreSQL. |
@@ -187,7 +204,7 @@ e mantenha os diretórios sob o bind mount:
 | Variável opcional | Padrão no container |
 |---|---|
 | `B3_RAW_COTAHIST_DIR` | `/data-lake/raw/cotahist` |
-| `B3_BRONZE_COTAHIST_DIR` | `/data-lake/bronze/cotahist` |
+| `B3_BRONZE_COTAHIST_DIR` | `/data-lake/bronze/cotacoes_historicas` |
 | `B3_SILVER_COTAHIST_DIR` | `/data-lake/silver/cotacoes_historicas` |
 
 O Compose também define valores internos que não precisam ser repetidos no
@@ -243,6 +260,17 @@ Para acompanhar logs dos serviços:
 ```sh
 docker compose logs -f airflow-api-server airflow-scheduler airflow-dag-processor duckdb-server
 ```
+
+Para acessar e validar a stack de observabilidade (detalhes, consultas e
+limitações em [Observabilidade](observabilidade.md)):
+
+```sh
+open http://localhost:${GRAFANA_PORT:-3000}
+docker compose logs -f otel-lgtm cadvisor alloy
+```
+
+O Grafana local usa `admin`/`admin` na configuração padrão da imagem LGTM; troque
+a senha após o primeiro acesso, mesmo sendo uma máquina de estudos.
 
 Use a UI do Airflow para disparar `b3_cotahist_medallion_pipeline` e abrir a
 aba **Logs** da task. `Up For Retry` indica que o Airflow agendou uma nova

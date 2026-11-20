@@ -87,10 +87,17 @@ flowchart LR
         Processor["airflow-dag-processor<br/>Airflow 3.3.1; importa DAGs"]
         DB[("PostgreSQL 15<br/>metadados Airflow")]
         Quack["DuckDB Server<br/>DuckDB 2.0 + Quack :9494"]
+        LGTM["otel-lgtm<br/>Grafana :3000 + Loki + Tempo + Prometheus + OTel Collector"]
+        CAdvisor["cAdvisor<br/>métricas de containers :8080 interno"]
+        Alloy["Grafana Alloy<br/>logs Docker e tasks"]
+        TaskLogs[("airflow-task-logs")]
+        ObsData[("observability-data")]
+        AlloyData[("alloy-data")]
     end
     Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake nos containers")]
 
     User -->|"HTTP: ${AIRFLOW_PORT:-8080} -> :8080"| API
+    User -->|"HTTP local: ${GRAFANA_PORT:-3000} -> :3000"| LGTM
     Init -->|"migrações e bootstrap"| DB
     Init -.->|"conclusão necessária para iniciar"| API
     Init -.-> Scheduler
@@ -102,13 +109,25 @@ flowchart LR
     Scheduler -->|"Quack + QUACK_TOKEN"| Quack
     Scheduler -.->|"tasks acessam entradas no bind mount"| Lake
     Quack -.->|"lê e grava arquivos de dados"| Lake
+    API -.->|"OTLP HTTP :4318"| LGTM
+    Scheduler -.->|"OTLP HTTP :4318"| LGTM
+    Processor -.->|"OTLP HTTP :4318"| LGTM
+    CAdvisor -->|"scrape :8080 a cada 5s"| LGTM
+    Alloy -->|"Docker API; push Loki :3100"| LGTM
+    API --> TaskLogs
+    Scheduler --> TaskLogs
+    Processor --> TaskLogs
+    Alloy -->|"lê somente"| TaskLogs
+    LGTM --> ObsData
+    Alloy --> AlloyData
 ```
 
 ## Stack utilizada
 
 | Tecnologia | Uso |
 |---|---|
-| Python 3.12 | DAGs, tasks Python e integração com DuckDB |
+| Python 3.12 | Airflow, DAGs, tasks Python e cliente DuckDB |
+| Python 3.15 | DuckDB Server e processamento analítico |
 | Apache Airflow 3.3.1 | API/UI, agendamento e processamento das tarefas |
 | `LocalExecutor` | Execução local das tarefas do Airflow |
 | DuckDB 2.0.0 | Motor analítico e processamento de arquivos |
@@ -232,11 +251,12 @@ Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
 ```
 
 O launcher valida a configuração do Compose, constrói e inicia PostgreSQL,
-DuckDB/Quack e os serviços Airflow, aguarda o endpoint de saúde do Airflow e
-abre a página da DAG configurada em `setup/start.py` (atualmente, a pipeline
-COTAHIST). Se o navegador não abrir automaticamente, acesse
-`http://localhost:8080` (ou a porta definida por `AIRFLOW_PORT`). A lista de
-DAGs e seus parâmetros depende das pipelines instaladas.
+DuckDB/Quack, Airflow e a stack de observabilidade, e aguarda o endpoint de
+saúde do Airflow. Ele não abre o navegador: ao concluir, imprime as URLs do
+Airflow, da pipeline COTAHIST, do Grafana e do Grafana Explore. O Grafana
+centraliza os gráficos, logs e traces; sua porta pode ser configurada por
+`GRAFANA_PORT` (padrão `3000`). A lista de DAGs e seus parâmetros depende das
+pipelines instaladas.
 
 Para iniciar a stack manualmente, use:
 
@@ -313,6 +333,9 @@ python -m compileall -q src airflow/dags duckdb-server
 - As hipóteses priorizadas para a próxima rodada de performance, com
   experimentos, métricas e critérios de decisão, estão em
   [Hipóteses de melhorias futuras](./docs/hipoteses-melhorias-performance.md).
+- A stack local de Grafana LGTM, métricas cAdvisor, logs Docker e
+  instrumentação OpenTelemetry do Airflow está descrita em
+  [Observabilidade](./docs/observabilidade.md).
 - `.env` contém credenciais locais e está ignorado pelo Git; não publique seus
   valores.
 - Quack autentica com token, mas as conexões não usam TLS. A porta `9494` não

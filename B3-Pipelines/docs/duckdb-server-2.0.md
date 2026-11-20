@@ -122,6 +122,13 @@ materialização de resultados grandes com `fetchall()` ou a transformação
 registro a registro no processo cliente pode aumentar uso de memória e custo de
 CPU; o caminho de carga do pipeline evita esse padrão.
 
+Na validação com DuckDB 2.0.0 e Quack, `con.execute(...)` executou SQL pela
+sessão remota, mas `con.sql(...)` e `con.read_csv(...)` não funcionaram depois
+de `CONNECT`: o primeiro falhou por não permitir `materialize()` na sessão
+roteada e o segundo com `Cannot plan statement of type PASSTHROUGH`. Portanto,
+as transformações Bronze e Silver permanecem em SQL enviado pela API DB-API;
+não migramos a leitura/escrita para a API relacional Python.
+
 ### 4. Execução direta sobre o HD externo
 
 **Antes:** a separação dos serviços ainda não estava conectada a um caminho

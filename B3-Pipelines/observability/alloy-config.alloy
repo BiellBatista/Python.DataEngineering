@@ -1,0 +1,53 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.local.receiver]
+}
+
+local.file_match "airflow_task_logs" {
+  path_targets = [
+    {
+      "__path__" = "/var/lib/airflow/logs/dag_id=*/run_id=*/task_id=*/attempt=*.log",
+      "job"      = "airflow-task",
+      "service"  = "airflow-task",
+    },
+  ]
+  sync_period = "5s"
+}
+
+loki.source.file "airflow_task_logs" {
+  targets    = local.file_match.airflow_task_logs.targets
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://otel-lgtm:3100/loki/api/v1/push"
+  }
+}

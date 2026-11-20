@@ -5,6 +5,15 @@ x-airflow-environment: &airflow-environment
   AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ${AIRFLOW__CORE__EXECUTION_API_SERVER_URL:-http://airflow-api-server:8080/execution/}
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?Set AIRFLOW__API_AUTH__JWT_SECRET in .env}
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD in .env}@postgres/airflow
+  AIRFLOW__TRACES__OTEL_ON: "true"
+  AIRFLOW__TRACES__OTEL_APPLICATION: b3-pipelines
+  AIRFLOW__METRICS__OTEL_ON: "true"
+  AIRFLOW__METRICS__OTEL_PREFIX: b3_airflow
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-lgtm:4318/v1/traces
+  OTEL_TRACES_EXPORTER: otlp_proto_http
+  OTEL_SERVICE_NAME: b3-pipelines-airflow
   B3_DATA_LAKE_ROOT: /data-lake
   DUCKDB_HOST: ${DUCKDB_HOST:-duckdb-server}
   DUCKDB_PORT: ${DUCKDB_PORT:-9494}
@@ -25,6 +34,7 @@ x-airflow-common: &airflow-common
   volumes:
     - ${B3_DATA_LAKE_ROOT:?Set B3_DATA_LAKE_ROOT in .env}:/data-lake
     - ./airflow/dags:/opt/airflow/dags
+    - airflow-task-logs:/opt/airflow/logs
   networks:
     - airflow_network
   restart: unless-stopped
@@ -53,7 +63,7 @@ services:
       context: .
       dockerfile: duckdb-server/Dockerfile
       args:
-        DUCKDB_BASE_IMAGE: ${DUCKDB_BASE_IMAGE:-python:3.12-slim}
+        DUCKDB_BASE_IMAGE: ${DUCKDB_BASE_IMAGE:-python:3.15-slim}
     environment:
       DUCKDB_HOST: 0.0.0.0
       DUCKDB_PORT: ${DUCKDB_PORT:-9494}
@@ -79,6 +89,58 @@ services:
       - airflow_network
     restart: unless-stopped
 
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.41.1
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    expose:
+      - "4317"
+      - "4318"
+      - "3100"
+      - "9090"
+    volumes:
+      - ./observability/prometheus.yml:/otel-lgtm/prometheus.yaml:ro
+      - observability-data:/data
+    networks:
+      - airflow_network
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    privileged: true
+    command:
+      - --housekeeping_interval=5s
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    expose:
+      - "8080"
+    networks:
+      - airflow_network
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.22.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+      - airflow-task-logs:/var/lib/airflow/logs:ro
+    depends_on:
+      otel-lgtm:
+        condition: service_healthy
+    networks:
+      - airflow_network
+    restart: unless-stopped
+
   airflow-init:
     <<: *airflow-common
     command: version
@@ -91,6 +153,8 @@ services:
       _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Set AIRFLOW_ADMIN_PASSWORD in .env}
     depends_on:
       postgres:
+        condition: service_healthy
+      otel-lgtm:
         condition: service_healthy
 
   airflow-api-server:
@@ -105,6 +169,8 @@ services:
         condition: service_healthy
       duckdb-server:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_healthy
 
   airflow-scheduler:
     <<: *airflow-common
@@ -116,6 +182,8 @@ services:
         condition: service_healthy
       duckdb-server:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_healthy
 
   airflow-dag-processor:
     <<: *airflow-common
@@ -125,9 +193,14 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      otel-lgtm:
+        condition: service_healthy
 
 volumes:
   postgres-db-volume:
+  observability-data:
+  alloy-data:
+  airflow-task-logs:
 
 networks:
   airflow_network:
