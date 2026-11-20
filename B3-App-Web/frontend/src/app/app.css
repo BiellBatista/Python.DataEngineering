@@ -1,0 +1,424 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.app-shell {
+  display: flex;
+  height: 100%;
+  min-height: 520px;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  height: 58px;
+  flex: 0 0 58px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #dfe3eb;
+  background: #fff;
+  padding: 0 22px;
+}
+
+.brand,
+.connection-state {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  gap: 11px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: #0756b8;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.brand-name {
+  color: #172b4d;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.connection-state {
+  gap: 8px;
+  color: #52637a;
+  font-size: 12px;
+}
+
+.state-dot,
+.catalog-footer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #20a36a;
+}
+
+.explorer {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.catalog-panel {
+  display: flex;
+  width: 264px;
+  flex: 0 0 264px;
+  flex-direction: column;
+  border-right: 1px solid #dfe3eb;
+  background: #fff;
+}
+
+.panel-heading,
+.query-heading,
+.results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-heading {
+  min-height: 91px;
+  padding: 18px 17px 14px 20px;
+}
+
+.eyebrow {
+  color: #77869b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.panel-heading h1,
+.query-heading h2,
+.results-heading h2 {
+  margin: 3px 0 0;
+  color: #172b4d;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.refresh-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #e1e6ee;
+  border-radius: 6px;
+  background: #fff;
+  color: #52637a;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.refresh-button:hover {
+  background: #f2f5f9;
+}
+
+.layer-list {
+  overflow: auto;
+  flex: 1;
+  padding: 8px 10px;
+}
+
+.layer-section {
+  margin-bottom: 17px;
+}
+
+.layer-title {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  color: #40536c;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.layer-chevron {
+  color: #76869a;
+  font-size: 16px;
+}
+
+.table-count {
+  margin-left: auto;
+  color: #8492a5;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.table-item {
+  display: flex;
+  width: 100%;
+  min-height: 33px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 5px 10px 5px 28px;
+  color: #42546c;
+  font-size: 12px;
+  text-align: left;
+}
+
+.table-item:hover {
+  background: #edf4fd;
+  color: #0756b8;
+}
+
+.table-icon {
+  color: #6684aa;
+  font-size: 13px;
+}
+
+.catalog-message,
+.empty-layer {
+  padding: 10px 18px;
+  color: #7c8999;
+  font-size: 12px;
+}
+
+.catalog-error {
+  color: #b42318;
+}
+
+.catalog-footer {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #e9edf2;
+  padding: 0 17px;
+  color: #728198;
+  font-size: 11px;
+}
+
+.catalog-footer-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.workspace {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 16px;
+}
+
+.query-panel,
+.results-panel {
+  border: 1px solid #dfe3eb;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.query-panel {
+  flex: 0 0 auto;
+  padding: 14px 16px 10px;
+}
+
+.query-heading,
+.results-heading {
+  min-height: 35px;
+  margin-bottom: 11px;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.clear-button {
+  border: 1px solid #dfe3eb;
+  color: #53647b;
+}
+
+.run-button {
+  min-width: 100px;
+}
+
+.editor-wrap {
+  display: flex;
+  min-height: 132px;
+  overflow: hidden;
+  border: 1px solid #e2e7ee;
+  border-radius: 5px;
+  background: #fbfcfe;
+}
+
+.line-numbers {
+  min-width: 39px;
+  border-right: 1px solid #e7ebf1;
+  padding: 9px 10px 9px 0;
+  color: #a0abba;
+  font: 12px/21px Consolas, "Liberation Mono", monospace;
+  text-align: right;
+  user-select: none;
+}
+
+.sql-editor {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 9px 12px;
+  color: #1d3557;
+  font: 13px/21px Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+}
+
+.editor-hint {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 8px;
+  color: #8390a2;
+  font-size: 10px;
+}
+
+.results-panel {
+  display: flex;
+  min-height: 200px;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px 16px;
+}
+
+.results-heading {
+  flex: 0 0 auto;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #6d7d91;
+  font-size: 11px;
+}
+
+.result-count {
+  border-radius: 10px;
+  background: #eef3f8;
+  padding: 4px 8px;
+}
+
+.truncated-note {
+  color: #9c6a19;
+}
+
+.result-table-wrap {
+  flex: 1;
+  border: 1px solid #e5e9ef;
+}
+
+.result-table {
+  margin: 0;
+  color: #34465e;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.result-table th {
+  position: sticky;
+  top: 0;
+  background: #f5f7fa;
+  color: #40536c;
+  font-weight: 600;
+}
+
+.result-table th,
+.result-table td {
+  max-width: 360px;
+  overflow: hidden;
+  padding: 8px 11px;
+  text-overflow: ellipsis;
+}
+
+.result-table th small {
+  display: block;
+  margin-top: 2px;
+  color: #8a97a8;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.result-table td {
+  max-width: 360px;
+}
+
+.query-error {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.query-error strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.empty-results {
+  display: flex;
+  min-height: 150px;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #8290a2;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .catalog-panel {
+    width: 205px;
+    flex-basis: 205px;
+  }
+
+  .workspace {
+    padding: 10px;
+  }
+
+  .topbar {
+    padding: 0 14px;
+  }
+}
+
+@media (max-width: 560px) {
+  .explorer {
+    flex-direction: column;
+  }
+
+  .catalog-panel {
+    width: auto;
+    max-height: 190px;
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid #dfe3eb;
+  }
+
+  .panel-heading {
+    min-height: 58px;
+  }
+
+  .catalog-footer {
+    display: none;
+  }
+
+  .workspace {
+    min-height: 0;
+  }
+}

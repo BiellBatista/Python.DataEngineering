@@ -205,3 +205,4 @@ volumes:
 networks:
   airflow_network:
     driver: bridge
+    name: ${B3_DOCKER_NETWORK:-b3-pipelines_airflow_network}

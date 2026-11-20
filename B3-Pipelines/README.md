@@ -184,6 +184,11 @@ O volume nomeado `postgres-db-volume` é separado do data lake e preserva o
 banco do Airflow entre reinicializações. `docker compose down` não o remove;
 `docker compose down -v` o apaga.
 
+A rede Docker compartilhada pelos serviços tem o nome estável
+`B3_DOCKER_NETWORK` (padrão `b3-pipelines_airflow_network`). Outros projetos
+locais, como o [B3-App-Web](../B3-App-Web/README.md), podem ingressar nessa
+rede para conectar-se ao DuckDBServer sem publicar a porta Quack no host.
+
 ## Setup
 
 Para configurar as variáveis e credenciais, entender a rede e os volumes, e

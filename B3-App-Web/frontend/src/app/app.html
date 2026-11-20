@@ -1,0 +1,182 @@
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">B3</span>
+      <span class="brand-name">Data Explorer</span>
+    </div>
+    <div class="connection-state">
+      <span class="state-dot"></span>
+      DuckDBServer
+    </div>
+  </header>
+
+  <main class="explorer">
+    <aside class="catalog-panel">
+      <div class="panel-heading">
+        <div>
+          <div class="eyebrow">CATÁLOGO</div>
+          <h1>Data Lake</h1>
+        </div>
+        <button
+          type="button"
+          class="refresh-button"
+          aria-label="Atualizar catálogo"
+          title="Atualizar catálogo"
+          (click)="loadCatalog()"
+        >↻</button>
+      </div>
+
+      @if (isLoadingCatalog) {
+        <div class="catalog-message">Carregando tabelas...</div>
+      } @else if (catalogError) {
+        <div class="catalog-message catalog-error">{{ catalogError }}</div>
+      } @else if (layers.length === 0) {
+        <div class="catalog-message">Nenhuma camada encontrada no Data Lake.</div>
+      } @else {
+        <div class="layer-list">
+          @for (layer of layers; track layer.name) {
+            <section class="layer-section">
+              <div class="layer-title">
+                <span class="layer-chevron">⌄</span>
+                <span>{{ layer.name }}</span>
+                <span class="table-count">{{ layer.tables.length }}</span>
+              </div>
+              @for (table of layer.tables; track table.qualified_name) {
+                <button
+                  type="button"
+                  class="table-item"
+                  [title]="'Consultar ' + table.qualified_name"
+                  (click)="selectTable(table)"
+                >
+                  <span class="table-icon">▦</span>
+                  {{ table.name }}
+                </button>
+              }
+              @if (layer.tables.length === 0) {
+                <div class="empty-layer">Nenhuma tabela</div>
+              }
+            </section>
+          }
+        </div>
+      }
+
+      <div class="catalog-footer">
+        <span class="catalog-footer-dot"></span>
+        Parquet · Bronze / Silver
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="query-panel">
+        <div class="query-heading">
+          <div>
+            <div class="eyebrow">EDITOR SQL</div>
+            <h2>Nova consulta</h2>
+          </div>
+          <div class="editor-actions">
+            <button type="button" class="btn btn-light btn-sm clear-button" (click)="clearQuery()">
+              Limpar
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm run-button"
+              [disabled]="isRunningQuery || !sql.trim()"
+              (click)="runQuery()"
+            >
+              @if (isRunningQuery) {
+                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                Executando
+              } @else {
+                <span aria-hidden="true">▶</span>
+                Executar
+              }
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1<br>2<br>3</div>
+          <textarea
+            class="sql-editor"
+            aria-label="Editor SQL"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            [(ngModel)]="sql"
+          ></textarea>
+        </div>
+        <div class="editor-hint">
+          <span>SQL · DuckDB</span>
+          <span>Somente consultas SELECT</span>
+        </div>
+      </div>
+
+      <div class="results-panel">
+        <div class="results-heading">
+          <div>
+            <div class="eyebrow">RESULTADO</div>
+            <h2>Resultados da consulta</h2>
+          </div>
+          @if (result) {
+            <div class="result-meta">
+              <span class="result-count">{{ result.row_count }} linhas</span>
+              @if (result.truncated) {
+                <span class="truncated-note">Limitado a {{ result.max_rows }} linhas</span>
+              }
+            </div>
+          }
+        </div>
+
+        @if (errorMessage) {
+          <div class="alert alert-danger query-error" role="alert">
+            <strong>Falha na consulta</strong>
+            <div>{{ errorMessage }}</div>
+          </div>
+        } @else if (isRunningQuery) {
+          <div class="empty-results">
+            <span class="spinner-border text-primary" aria-hidden="true"></span>
+            <span>Executando consulta no DuckDB...</span>
+          </div>
+        } @else if (result && result.columns.length > 0) {
+          @if (result.rows.length === 0) {
+            <div class="empty-results">A consulta não retornou linhas.</div>
+          } @else {
+            <div class="table-responsive result-table-wrap">
+              <table class="table table-sm table-hover result-table">
+                <thead>
+                  <tr>
+                    @for (column of result.columns; track $index) {
+                      <th scope="col">
+                        <span>{{ column.name }}</span>
+                        <small>{{ column.type }}</small>
+                      </th>
+                    }
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of result.rows; track $index) {
+                    <tr>
+                      @for (value of row; track $index) {
+                        <td [title]="value === null ? 'NULL' : ''">
+                          {{ value === null ? 'NULL' : value }}
+                        </td>
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+        } @else {
+          <div class="empty-results">
+            @if (hasRunQuery) {
+              A consulta foi executada sem colunas para exibir.
+            } @else {
+              Execute uma consulta para visualizar os resultados aqui.
+            }
+          </div>
+        }
+      </div>
+    </section>
+  </main>
+</div>

@@ -1,0 +1,4 @@
+duckdb==2.0.0
+fastapi>=0.115,<1
+pytz>=2024.1
+uvicorn>=0.34,<1
