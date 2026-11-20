@@ -139,6 +139,18 @@ Em **Explore**, selecione a fonte de dados correspondente:
 - **Logs (Loki):** `{service="duckdb-server"}` ou
   `{service="airflow-scheduler"}`. Também é possível pesquisar pelo nome do
   container com `{container=~".*airflow.*"}`.
+  O decorador `log_parameters` vincula os argumentos das etapas de carga e
+  validação ao contexto do `structlog`: RAW vincula `start_year`, `end_year` e
+  `input_dir`; Data Quality Bronze também vincula `memory_limit` e `threads`;
+  Bronze vincula `dag_run_id`, intervalo, limites, diretórios e
+  `ingestion_time`; Silver vincula `dag_run_id`, intervalo, limites e
+  diretórios. O contexto é propagado aos workers paralelos Bronze. Porém, os
+  módulos emitem mensagens por `logging` padrão e a configuração atual não
+  mescla o contexto do `structlog` nos registros formatados. Portanto, esses
+  campos ainda não são garantidos no texto enviado ao Loki e o filtro
+  `{service="airflow-task"} |= "start_year=2024"` não deve ser considerado
+  funcional até que a configuração de logging inclua esse contexto. A
+  interface do Airflow continua exibindo os logs das tasks.
 - **Métricas (Prometheus):**
   `rate(container_cpu_usage_seconds_total[1m])` para CPU; use
   `container_memory_working_set_bytes` para memória e

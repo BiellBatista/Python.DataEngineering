@@ -63,64 +63,86 @@ configuração detalhada da infraestrutura está em
 
 ```mermaid
 flowchart LR
-    Operator["Pessoa operadora"]
-    Sources["Fontes de dados<br/>preparação externa ou sistemas integrados"]
-    Platform["B3 Pipelines<br/>Airflow + processamento das DAGs"]
-    Lake[("Data Lake<br/>arquivos de entrada e saída")]
-    Metadata[("PostgreSQL<br/>metadados e estado do Airflow")]
+    Operator["Pessoa operadora<br/>Configura e acompanha pipelines"]
 
-    Operator -->|"Configura e dispara DAGs"| Platform
-    Sources -->|"Disponibiliza entradas"| Lake
-    Platform -->|"Lê entradas e grava saídas"| Lake
-    Platform -->|"Registra estado e execuções"| Metadata
+    subgraph B3System["B3 Pipelines — sistema de software"]
+        Platform["Orquestra, processa e observa pipelines de dados"]
+    end
+
+    Operator -->|"Dispara DAGs e acompanha execuções"| Platform
 ```
+
+O C1 segue o escopo do [diagrama de contexto do C4](https://c4model.com/diagrams/system-context):
+mostra o sistema e as pessoas que interagem diretamente com ele. A B3 é a
+origem dos dados COTAHIST, mas não há integração direta de download na
+implementação atual: a DAG consome arquivos RAW previamente preparados no Data
+Lake. A observabilidade pertence ao sistema B3 Pipelines e aparece em mais
+detalhe no C2.
 
 ### C2 — Containers e relações
 
 ```mermaid
 flowchart LR
     User["Pessoa engenheira de dados<br/>Navegador"]
-    subgraph Docker["Docker Compose — rede bridge airflow_network"]
-        Init["airflow-init<br/>Airflow 3.3.1<br/>migra o banco e cria usuário; execução única"]
-        API["airflow-api-server<br/>Airflow 3.3.1; UI/API :8080"]
-        Scheduler["airflow-scheduler<br/>Airflow 3.3.1; LocalExecutor e tarefas"]
-        Processor["airflow-dag-processor<br/>Airflow 3.3.1; importa DAGs"]
-        DB[("PostgreSQL 15<br/>metadados Airflow")]
-        Quack["DuckDB Server<br/>DuckDB 2.0 + Quack :9494"]
-        LGTM["otel-lgtm<br/>Grafana :3000 + Loki + Tempo + Prometheus + OTel Collector"]
-        CAdvisor["cAdvisor<br/>métricas de containers :8080 interno"]
-        Alloy["Grafana Alloy<br/>logs Docker e tasks"]
-        TaskLogs[("airflow-task-logs")]
-        ObsData[("observability-data")]
-        AlloyData[("alloy-data")]
-    end
-    Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake nos containers")]
+    DockerAPI["Docker Engine API<br/>stdout/stderr dos containers"]
+    Cgroups["Docker host / cgroups<br/>inclui métricas do DuckDB"]
 
-    User -->|"HTTP: ${AIRFLOW_PORT:-8080} -> :8080"| API
-    User -->|"HTTP local: ${GRAFANA_PORT:-3000} -> :3000"| LGTM
+    subgraph B3System["B3 Pipelines — sistema de software"]
+        subgraph Core["Processamento e armazenamento"]
+            Init["airflow-init<br/>Airflow 3.3.1<br/>migra banco e cria usuário"]
+            API["airflow-api-server<br/>Airflow 3.3.1; UI/API :8080"]
+            Scheduler["airflow-scheduler<br/>Airflow 3.3.1; LocalExecutor e tasks"]
+            Processor["airflow-dag-processor<br/>Airflow 3.3.1; processa DAGs"]
+            DB[("PostgreSQL 15<br/>metadados Airflow")]
+            Quack["duckdb-server<br/>Python 3.15; DuckDB 2.0 + Quack :9494"]
+            Lake[("Data Lake<br/>bind mount do host em /data-lake")]
+            TaskLogs[("Volume airflow-task-logs<br/>compartilhado com Alloy")]
+        end
+
+        subgraph Observability["Observabilidade"]
+            LGTM["otel-lgtm<br/>Grafana :3000; OTel Collector;<br/>Prometheus, Loki, Tempo e Pyroscope"]
+            CAdvisor["cAdvisor<br/>coleta de métricas dos containers"]
+            Alloy["Grafana Alloy<br/>coleta logs Docker e tasks"]
+            ObsData[("Volume observability-data")]
+            AlloyData[("Volume alloy-data<br/>estado/posições de leitura")]
+        end
+    end
+
+    User -->|"HTTP: AIRFLOW_PORT -> :8080"| API
+    User -->|"HTTP local: GRAFANA_PORT -> :3000"| LGTM
     Init -->|"migrações e bootstrap"| DB
     Init -.->|"conclusão necessária para iniciar"| API
     Init -.-> Scheduler
     Init -.-> Processor
     API -->|"metadados e estado"| DB
-    Scheduler -->|"agenda tarefas e atualiza estado"| DB
+    Scheduler -->|"agenda tasks e atualiza estado"| DB
     Processor -->|"publica metadados das DAGs"| DB
     Scheduler -->|"worker local: Execution API + JWT"| API
     Scheduler -->|"Quack + QUACK_TOKEN"| Quack
-    Scheduler -.->|"tasks acessam entradas no bind mount"| Lake
-    Quack -.->|"lê e grava arquivos de dados"| Lake
-    API -.->|"OTLP HTTP :4318"| LGTM
-    Scheduler -.->|"OTLP HTTP :4318"| LGTM
-    Processor -.->|"OTLP HTTP :4318"| LGTM
-    CAdvisor -->|"scrape :8080 a cada 5s"| LGTM
-    Alloy -->|"Docker API; push Loki :3100"| LGTM
-    API --> TaskLogs
-    Scheduler --> TaskLogs
-    Processor --> TaskLogs
-    Alloy -->|"lê somente"| TaskLogs
+    Scheduler -->|"tasks validam arquivos RAW"| Lake
+    Quack -.->|"lê e grava arquivos Parquet"| Lake
+
+    Scheduler -->|"grava logs de task"| TaskLogs
+    API -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    Scheduler -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    Processor -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    CAdvisor -->|"Prometheus scrape :8080 /metrics"| LGTM
+    CAdvisor -->|"lê métricas dos cgroups montados"| Cgroups
+    Alloy -->|"consulta API e coleta logs<br/>(inclui stdout/stderr do DuckDB)"| DockerAPI
+    Alloy -->|"lê volume em modo somente leitura"| TaskLogs
+    Alloy -->|"envia logs ao Loki :3100"| LGTM
     LGTM --> ObsData
     Alloy --> AlloyData
 ```
+
+O C2 segue o escopo do [diagrama de containers do C4](https://c4model.com/diagrams/container):
+detalha os containers dentro de um único limite de sistema. Os grupos internos
+separam responsabilidades, não sistemas ou redes Docker; os containers usam
+a rede Compose `airflow_network`. O Data Lake é um armazenamento de arquivos
+persistente montado nos containers (um data store no C4, embora não seja um
+container Docker). O DuckDB Server não exporta OTLP diretamente: suas métricas
+de container são observadas pelo cAdvisor e seus logs stdout/stderr são
+coletados pelo Alloy via Docker Engine API.
 
 ## Stack utilizada
 

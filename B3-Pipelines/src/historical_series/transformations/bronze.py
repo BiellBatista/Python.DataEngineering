@@ -4,11 +4,13 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from common.exceptions import BronzeError
+from common.log_context import log_parameters
 from config import (
     BRONZE_COTAHIST_DIR,
     BRONZE_MAX_WORKERS,
@@ -92,6 +94,8 @@ COPY_QUERY = rf"""
     );
 """
 
+
+@log_parameters
 def execute_bronze_load(
     dag_run_id: str,
     start_year: int,
@@ -168,6 +172,7 @@ def execute_bronze_load(
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bronze-worker") as executor:
             futures = {
                 executor.submit(
+                    copy_context().run,
                     _load_raw_dir,
                     raw_dir,
                     dag_run_id,

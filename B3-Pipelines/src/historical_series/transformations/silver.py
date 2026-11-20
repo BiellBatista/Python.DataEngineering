@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from common.exceptions import BronzeError, SilverError
+from common.log_context import log_parameters
 from config import (
     B3_CLOSE_PRICE_START,
     B3_HIGH_PRICE_START,
@@ -161,6 +162,8 @@ COPY_QUERY = f"""
     );
 """
 
+
+@log_parameters
 def execute_silver_load(
     dag_run_id: str,
     start_year: int,

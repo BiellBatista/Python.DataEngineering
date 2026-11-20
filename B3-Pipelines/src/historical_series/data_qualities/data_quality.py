@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from common.exceptions import BronzeError, DataQualityError
+from common.log_context import log_parameters
 from config import (
     B3_CLOSE_PRICE_START,
     B3_DECIMAL_SCALE,
@@ -40,6 +41,7 @@ from utils.duckdb_connection import connect_duckdb, execute_query
 logger = logging.getLogger(__name__)
 
 
+@log_parameters
 def validate_raw_quality(
     start_year: int,
     end_year: int,
@@ -123,6 +125,7 @@ def _validate_raw_quality(
         )
 
 
+@log_parameters
 def validate_bronze_quality(
     start_year: int,
     end_year: int,

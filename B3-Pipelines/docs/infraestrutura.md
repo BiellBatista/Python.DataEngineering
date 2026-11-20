@@ -21,21 +21,31 @@ copiados para as imagens.
 %%{init: {"flowchart": {"curve": "basis"}}}%%
 flowchart LR
     Operator["Operador<br/>Navegador"]
-    Lake[("Data lake no host<br/>B3_DATA_LAKE_ROOT<br/>montado em /data-lake nos containers Airflow e DuckDB")]
+    DockerAPI["Docker Engine API<br/>stdout/stderr dos containers"]
+    Cgroups["Docker host / cgroups<br/>inclui métricas do DuckDB"]
 
-    subgraph Docker["Docker Compose — airflow_network (bridge do projeto)"]
-        Init["airflow-init<br/>Migra o banco e cria o usuário<br/>execução única"]
-        API["airflow-api-server<br/>UI/API :8080"]
-        Scheduler["airflow-scheduler<br/>LocalExecutor + workers locais"]
-        Processor["airflow-dag-processor<br/>Importa e processa DAGs"]
-        Postgres[("postgres<br/>PostgreSQL 15")]
-        DuckDB["duckdb-server<br/>DuckDB 2.0 + Quack :9494"]
-        LGTM["otel-lgtm<br/>Grafana + Loki + Tempo + Prometheus + OTel Collector"]
-        CAdvisor["cadvisor<br/>métricas de contêineres :8080 interno"]
-        Alloy["alloy<br/>logs Docker/task -> Loki"]
+    subgraph B3System["B3 Pipelines — sistema de software"]
+        subgraph Core["Processamento e armazenamento"]
+            Lake[("Data Lake<br/>bind mount do host em /data-lake")]
+            Init["airflow-init<br/>migra banco e cria usuário"]
+            API["airflow-api-server<br/>UI/API :8080"]
+            Scheduler["airflow-scheduler<br/>LocalExecutor + workers locais"]
+            Processor["airflow-dag-processor<br/>importa e processa DAGs"]
+            Postgres[("postgres<br/>PostgreSQL 15")]
+            DuckDB["duckdb-server<br/>Python 3.15; DuckDB 2.0 + Quack :9494"]
+            TaskLogs[("Volume airflow-task-logs")]
+        end
+        subgraph Observability["Observabilidade"]
+            LGTM["otel-lgtm<br/>Grafana :3000; OTel Collector;<br/>Prometheus, Loki, Tempo e Pyroscope"]
+            CAdvisor["cadvisor<br/>coleta métricas dos containers"]
+            Alloy["alloy<br/>coleta logs Docker e tasks"]
+            ObsData[("Volume observability-data")]
+            AlloyData[("Volume alloy-data")]
+        end
     end
 
-    Operator -->|"HTTP: AIRFLOW_PORT -> 8080"| API
+    Operator -->|"HTTP: AIRFLOW_PORT -> :8080"| API
+    Operator -->|"HTTP local: GRAFANA_PORT -> :3000"| LGTM
     Init -->|"migrações e bootstrap"| Postgres
     Init -.->|"inicialização concluída"| API
     Init -.-> Scheduler
@@ -45,20 +55,33 @@ flowchart LR
     Processor -->|"publica metadados das DAGs"| Postgres
     Scheduler -->|"Execution API interna + JWT"| API
     Scheduler -->|"Quack + QUACK_TOKEN"| DuckDB
-    API -.->|"OTLP HTTP :4318"| LGTM
-    Scheduler -.->|"OTLP HTTP :4318"| LGTM
-    Processor -.->|"OTLP HTTP :4318"| LGTM
-    CAdvisor -->|"scrape Prometheus :8080 a cada 5s"| LGTM
-    Alloy -->|"Docker API + arquivos Airflow; push Loki :3100"| LGTM
-    Lake -.->|"validação RAW"| Scheduler
-    Lake -.->|"leitura e escrita Parquet"| DuckDB
+    Scheduler -->|"lê e valida RAW"| Lake
+    DuckDB -->|"lê e grava Parquet"| Lake
+    Scheduler -->|"grava logs de task"| TaskLogs
+    API -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    Scheduler -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    Processor -.->|"métricas e traces: OTLP/HTTP :4318"| LGTM
+    CAdvisor -->|"Prometheus scrape :8080 /metrics"| LGTM
+    CAdvisor -->|"lê métricas dos cgroups montados"| Cgroups
+    Alloy -->|"consulta API e coleta logs<br/>(inclui stdout/stderr do DuckDB)"| DockerAPI
+    Alloy -->|"lê volume em modo somente leitura"| TaskLogs
+    Alloy -->|"envia logs ao Loki :3100"| LGTM
+    LGTM --> ObsData
+    Alloy --> AlloyData
 ```
 
 Todos os containers Compose usam a rede `airflow_network` e se encontram pelos
 nomes de serviço. A porta da UI é publicada no host como `${AIRFLOW_PORT:-8080}`
-e encaminhada para `8080` no API server. PostgreSQL (`5432`) e DuckDB/Quack
+e encaminhada para `8080` no API server. Grafana é publicado somente em
+`127.0.0.1:${GRAFANA_PORT:-3000}`. PostgreSQL (`5432`) e DuckDB/Quack
 (`DUCKDB_PORT`, padrão `9494`) não são publicados no host; Quack é apenas
 exposto à rede do projeto.
+
+Os grupos internos do C2 separam responsabilidades dentro do sistema B3
+Pipelines; não criam redes Docker isoladas. Todos os containers usam
+`airflow_network`. O DuckDB Server não exporta OTLP diretamente: o cAdvisor
+coleta métricas do container via cgroups e o Alloy coleta seu stdout/stderr
+pela Docker Engine API.
 
 O mapeamento atual do API server não fixa um endereço IP no host; por isso, o
 Docker pode publicá-lo em todas as interfaces, não somente em `localhost`. A
