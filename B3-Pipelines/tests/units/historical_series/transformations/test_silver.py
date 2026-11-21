@@ -89,7 +89,7 @@ class SilverTransformationTests(unittest.TestCase):
                     "SELECT preco_fechamento, volume_total, "
                     "CAST(_ingested_at AS VARCHAR), "
                     "CAST(_bronze_ingested_at AS VARCHAR), _raw_source_file, "
-                    "_bronze_source_file, _source_file, _dag_run_id "
+                    "_bronze_source_file, _dag_run_id "
                     f"FROM read_parquet('{_escape_sql_path(silver_file)}')"
                 ).fetchone()
                 types = dict(
@@ -106,8 +106,8 @@ class SilverTransformationTests(unittest.TestCase):
             self.assertGreater(result[2], result[3])
             self.assertEqual(result[4], "COTAHIST_Z.TXT")
             self.assertEqual(result[5], str(bronze_file))
-            self.assertEqual(result[6], str(bronze_file))
-            self.assertEqual(result[7], "silver-run")
+            self.assertEqual(result[6], "silver-run")
+            self.assertNotIn("_source_file", types)
             for column in (
                 "preco_abertura",
                 "preco_maximo",

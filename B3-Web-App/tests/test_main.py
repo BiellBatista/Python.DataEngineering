@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import duckdb
+from pydantic import ValidationError
 
 from backend import main
 
@@ -69,6 +70,26 @@ class ValidateQueryTests(unittest.TestCase):
     def test_rejects_invalid_sql(self) -> None:
         with self.assertRaises(main.QueryValidationError):
             main._validate_query("SELECT FROM")
+
+
+class FrontendLogValidationTests(unittest.TestCase):
+    def test_accepts_known_event_and_safe_metadata(self) -> None:
+        event = main.FrontendLogRequest(
+            event="consulta_concluida",
+            duration_ms=25,
+            result_rows=10,
+        )
+
+        self.assertEqual(event.event, main.FrontendLogEvent.QUERY_COMPLETED)
+
+    def test_rejects_unknown_events_and_arbitrary_query_text(self) -> None:
+        with self.assertRaises(ValidationError):
+            main.FrontendLogRequest(event="sql_completo")
+        with self.assertRaises(ValidationError):
+            main.FrontendLogRequest(
+                event="consulta_concluida",
+                sql="SELECT * FROM silver.cotacoes_historicas",
+            )
 
 
 if __name__ == "__main__":

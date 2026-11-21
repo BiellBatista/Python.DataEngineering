@@ -58,7 +58,7 @@ no código atual.
    Se a escrita falhar ou a promoção não concluir, tenta preservar/restaurar a
    partição anterior daquele ano.
 7. Metadados incluem `_ingested_at` da Silver, `_bronze_ingested_at`,
-   `_raw_source_file`, `_bronze_source_file`, `_source_file` e `_dag_run_id`.
+   `_raw_source_file`, `_bronze_source_file` e `_dag_run_id`.
 
 ## Requisitos funcionais
 

@@ -2,6 +2,8 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Component, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 
+import { FrontendTelemetryService } from './telemetry';
+
 interface CatalogTable {
   name: string;
   qualified_name: string;
@@ -39,6 +41,7 @@ interface QueryResponse {
 })
 export class AppComponent implements OnInit {
   private readonly http = inject(HttpClient);
+  private readonly telemetry = inject(FrontendTelemetryService);
 
   layers: CatalogLayer[] = [];
   sql = '';
@@ -50,16 +53,25 @@ export class AppComponent implements OnInit {
   hasRunQuery = false;
 
   ngOnInit(): void {
+    this.telemetry.emit('aplicacao_iniciada');
     this.loadCatalog();
   }
 
   loadCatalog(): void {
+    const startedAt = performance.now();
     this.isLoadingCatalog = true;
     this.http.get<CatalogResponse>('/api/catalog').subscribe({
       next: (response) => {
         this.layers = response.layers;
         this.catalogError = '';
         this.isLoadingCatalog = false;
+        this.telemetry.emit('catalogo_carregado', {
+          duration_ms: Math.round(performance.now() - startedAt),
+          catalog_tables: response.layers.reduce(
+            (total, layer) => total + layer.tables.length,
+            0,
+          ),
+        });
         const preferredLayer = response.layers.find(
           (layer) => layer.name === 'silver' && layer.tables.length > 0,
         );
@@ -73,6 +85,9 @@ export class AppComponent implements OnInit {
       error: (error: HttpErrorResponse) => {
         this.isLoadingCatalog = false;
         this.catalogError = this.errorDetail(error);
+        this.telemetry.emit('falha_ao_carregar_catalogo', {
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
       },
     });
   }
@@ -83,18 +98,27 @@ export class AppComponent implements OnInit {
   }
 
   runQuery(): void {
+    const startedAt = performance.now();
     this.isRunningQuery = true;
     this.hasRunQuery = true;
     this.result = null;
     this.errorMessage = '';
+    this.telemetry.emit('consulta_iniciada');
     this.http.post<QueryResponse>('/api/query', { sql: this.sql }).subscribe({
       next: (response) => {
         this.result = response;
         this.isRunningQuery = false;
+        this.telemetry.emit('consulta_concluida', {
+          duration_ms: Math.round(performance.now() - startedAt),
+          result_rows: response.row_count,
+        });
       },
       error: (error: HttpErrorResponse) => {
         this.errorMessage = this.errorDetail(error);
         this.isRunningQuery = false;
+        this.telemetry.emit('falha_na_consulta', {
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
       },
     });
   }

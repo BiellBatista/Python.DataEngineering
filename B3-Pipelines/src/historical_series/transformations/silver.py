@@ -142,7 +142,6 @@ COPY_QUERY = f"""
             _bronze_ingested_at,
             _raw_source_file,
             _bronze_source_file,
-            _bronze_source_file AS _source_file,
             _dag_run_id
         FROM parsed
         QUALIFY row_number() OVER (

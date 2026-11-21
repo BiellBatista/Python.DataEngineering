@@ -1,18 +1,31 @@
 """API web do Data Explorer, conectada ao DuckDBServer via Quack."""
 
 import base64
+import logging
 import math
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
+from time import perf_counter
 from typing import Iterator
 
 import duckdb
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from opentelemetry.trace import Span, Status, StatusCode
+from pydantic import BaseModel, ConfigDict, Field
+
+from backend.observability import (
+    logger,
+    observe_http_requests,
+    observability_lifespan,
+    record_frontend_event,
+    record_query_metrics,
+    tracer,
+)
 
 DATA_LAKE_ROOT = Path(os.getenv("B3_DATA_LAKE_ROOT", "/data-lake"))
 DUCKDB_HOST = os.getenv("DUCKDB_HOST", "duckdb-server")
@@ -24,11 +37,35 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _MAX_QUERY_ROWS_LIMIT = 100_000
 
-app = FastAPI(title="B3 Data Explorer", version="0.1.0")
+app = FastAPI(
+    title="B3 Data Explorer",
+    version="0.1.0",
+    lifespan=observability_lifespan,
+)
+app.middleware("http")(observe_http_requests)
 
 
 class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=100_000)
+
+
+class FrontendLogEvent(str, Enum):
+    APPLICATION_STARTED = "aplicacao_iniciada"
+    CATALOG_LOADED = "catalogo_carregado"
+    CATALOG_LOAD_FAILED = "falha_ao_carregar_catalogo"
+    QUERY_STARTED = "consulta_iniciada"
+    QUERY_COMPLETED = "consulta_concluida"
+    QUERY_FAILED = "falha_na_consulta"
+    INTERFACE_ERROR = "erro_na_interface"
+
+
+class FrontendLogRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event: FrontendLogEvent
+    duration_ms: float | None = Field(default=None, ge=0, le=300_000)
+    catalog_tables: int | None = Field(default=None, ge=0, le=10_000)
+    result_rows: int | None = Field(default=None, ge=0, le=100_000)
 
 
 class QueryValidationError(ValueError):
@@ -49,20 +86,30 @@ def _connect_duckdb() -> duckdb.DuckDBPyConnection:
     if not 1 <= DUCKDB_PORT <= 65535:
         raise RuntimeError("DUCKDB_PORT deve estar entre 1 e 65535.")
 
-    connection = duckdb.connect(":memory:")
-    try:
-        connection.execute("INSTALL quack")
-        connection.execute("LOAD quack")
-        uri = f"quack:{DUCKDB_HOST}:{DUCKDB_PORT}"
-        connection.execute(
-            f"ATTACH '{_escape_sql_string(uri)}' AS remote "
-            f"(TYPE quack, TOKEN '{_escape_sql_string(QUACK_TOKEN)}', "
-            "DISABLE_SSL true)"
-        )
-        connection.execute("CONNECT remote")
-    except Exception:
-        connection.close()
-        raise
+    with tracer.start_as_current_span("duckdb.connect") as span:
+        span.set_attribute("db.system.name", "duckdb")
+        span.set_attribute("server.address", DUCKDB_HOST)
+        span.set_attribute("server.port", DUCKDB_PORT)
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute("INSTALL quack")
+            connection.execute("LOAD quack")
+            uri = f"quack:{DUCKDB_HOST}:{DUCKDB_PORT}"
+            connection.execute(
+                f"ATTACH '{_escape_sql_string(uri)}' AS remote "
+                f"(TYPE quack, TOKEN '{_escape_sql_string(QUACK_TOKEN)}', "
+                "DISABLE_SSL true)"
+            )
+            connection.execute("CONNECT remote")
+        except Exception:
+            span.set_status(
+                Status(
+                    StatusCode.ERROR,
+                    "Falha ao conectar ao DuckDBServer.",
+                )
+            )
+            connection.close()
+            raise
 
     return connection
 
@@ -147,7 +194,19 @@ def _ready_connection() -> Iterator[tuple[duckdb.DuckDBPyConnection, list[dict[s
 
     try:
         tables = _discover_tables()
-        _register_tables(connection, tables)
+        with tracer.start_as_current_span("duckdb.catalog.register") as span:
+            span.set_attribute("db.system.name", "duckdb")
+            span.set_attribute("b3.catalog.dataset_count", len(tables))
+            try:
+                _register_tables(connection, tables)
+            except (duckdb.Error, ValueError):
+                span.set_status(
+                    Status(
+                        StatusCode.ERROR,
+                        "Falha ao registrar o catálogo do Data Lake.",
+                    )
+                )
+                raise
         yield connection, tables
     except OSError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -224,39 +283,107 @@ def catalog() -> dict[str, list[dict[str, object]]]:
         }
 
 
+@app.post("/api/logs", status_code=202)
+def frontend_log(request: FrontendLogRequest) -> dict[str, str]:
+    warning_events = {
+        FrontendLogEvent.CATALOG_LOAD_FAILED,
+        FrontendLogEvent.QUERY_FAILED,
+    }
+    error_events = {FrontendLogEvent.INTERFACE_ERROR}
+    record_frontend_event(request.event.value, request.duration_ms)
+    level = (
+        logging.ERROR
+        if request.event in error_events
+        else logging.WARNING
+        if request.event in warning_events
+        else logging.INFO
+    )
+    logger.log(
+        level,
+        "Evento de observabilidade recebido do frontend.",
+        extra={
+            "frontend_event": request.event.value,
+            "duration_ms": request.duration_ms,
+            "catalog_tables": request.catalog_tables,
+            "result_rows": request.result_rows,
+        },
+    )
+    return {"status": "recebido"}
+
+
 @app.post("/api/query")
 def query(request: QueryRequest) -> dict[str, object]:
+    started_at = perf_counter()
+    outcome = "falha"
     try:
-        _validate_query(request.sql)
-    except QueryValidationError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-    if not 1 <= MAX_QUERY_ROWS <= _MAX_QUERY_ROWS_LIMIT:
-        raise HTTPException(
-            status_code=500,
-            detail=f"MAX_QUERY_ROWS deve estar entre 1 e {_MAX_QUERY_ROWS_LIMIT}.",
-        )
-
-    with _ready_connection() as (connection, _):
         try:
-            connection.execute(request.sql)
-            columns = [
-                {"name": description[0], "type": str(description[1])}
-                for description in connection.description or []
-            ]
-            fetched_rows = connection.fetchmany(MAX_QUERY_ROWS + 1)
-        except duckdb.Error as error:
+            _validate_query(request.sql)
+        except QueryValidationError as error:
+            outcome = "rejeitada"
+            logger.warning(
+                "Consulta rejeitada pela política somente leitura.",
+                extra={"outcome": outcome, "error_type": type(error).__name__},
+            )
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-    truncated = len(fetched_rows) > MAX_QUERY_ROWS
-    rows = fetched_rows[:MAX_QUERY_ROWS]
-    return {
-        "columns": columns,
-        "rows": [[_json_value(value) for value in row] for row in rows],
-        "row_count": len(rows),
-        "truncated": truncated,
-        "max_rows": MAX_QUERY_ROWS,
-    }
+        if not 1 <= MAX_QUERY_ROWS <= _MAX_QUERY_ROWS_LIMIT:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"MAX_QUERY_ROWS deve estar entre 1 e "
+                    f"{_MAX_QUERY_ROWS_LIMIT}."
+                ),
+            )
+
+        with _ready_connection() as (connection, _):
+            with tracer.start_as_current_span("duckdb.query") as span:
+                span.set_attribute("db.system.name", "duckdb")
+                span.set_attribute("server.address", DUCKDB_HOST)
+                span.set_attribute("server.port", DUCKDB_PORT)
+                span.set_attribute("db.operation.name", "SELECT")
+                try:
+                    connection.execute(request.sql)
+                    columns = [
+                        {
+                            "name": description[0],
+                            "type": str(description[1]),
+                        }
+                        for description in connection.description or []
+                    ]
+                    fetched_rows = connection.fetchmany(MAX_QUERY_ROWS + 1)
+                    truncated = len(fetched_rows) > MAX_QUERY_ROWS
+                    rows = fetched_rows[:MAX_QUERY_ROWS]
+                    span.set_attribute("db.response.returned_rows", len(rows))
+                    span.set_attribute("b3.query.truncated", truncated)
+                except duckdb.Error as error:
+                    span.set_status(
+                        Status(
+                            StatusCode.ERROR,
+                            "DuckDB rejeitou a consulta SQL.",
+                        )
+                    )
+                    logger.warning(
+                        "DuckDB rejeitou a consulta SQL.",
+                        extra={
+                            "outcome": "falha",
+                            "error_type": type(error).__name__,
+                        },
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=str(error),
+                    ) from error
+
+        outcome = "sucesso"
+        return {
+            "columns": columns,
+            "rows": [[_json_value(value) for value in row] for row in rows],
+            "row_count": len(rows),
+            "truncated": truncated,
+            "max_rows": MAX_QUERY_ROWS,
+        }
+    finally:
+        record_query_metrics(outcome, perf_counter() - started_at)
 
 
 app.mount(

@@ -9,6 +9,7 @@ dos dados nem publicar endpoints de ingestão OTLP ou cAdvisor no host.
 |---|---|---|
 | Traces/APM | Instrumentação nativa OpenTelemetry do Airflow 3. Spans manuais de aplicação só aparecem quando adicionados explicitamente às tasks; o exemplo abaixo não está aplicado às tasks atuais. | OTel Collector recebe OTLP/HTTP; Tempo armazena traces; Grafana explora-os. |
 | Métricas do Airflow | Exporter OpenTelemetry habilitado pela configuração do Airflow. | Collector recebe OTLP/HTTP; Prometheus armazena métricas; Grafana consulta. |
+| B3-Web-App | O backend exporta traces e métricas OTLP/HTTP; eventos do frontend seguem para a API e são registrados em JSON no stdout. | Tempo e Prometheus recebem OTLP; Alloy coleta os logs do container para Loki. |
 | Métricas de hardware dos containers | cAdvisor coleta CPU, RAM, disco e rede; Prometheus faz scrape a cada 5 segundos. Em Docker Desktop, rede fica agregada ao host/VM e não está disponível por container nesta execução. | Prometheus e Grafana. |
 | Logs dos containers e tasks | Grafana Alloy descobre containers pela Docker Engine API e também lê os arquivos locais de log das tasks do Airflow. | Loki recebe logs; Grafana permite filtrar por `service`, `container` ou `job`. |
 
@@ -41,6 +42,9 @@ mas profiling contínuo não foi habilitado nesta configuração.
   3.3.1 para Python 3.12.
 - [.env.example](../.env.example): documenta `GRAFANA_PORT` (opcional; padrão
   `3000`).
+- O [B3-Web-App](../../B3-Web-App/README.md) compartilha a rede e o `otel-lgtm`;
+  seu `.env` usa `OTEL_SERVICE_NAME=b3-web-app-api` para identificar traces e
+  `OTEL_ENABLED` para habilitar/desabilitar a exportação.
 
 O projeto usa `AIRFLOW__TRACES__OTEL_ON` e
 `AIRFLOW__METRICS__OTEL_ON` para habilitar traces e métricas no Airflow. O
@@ -165,6 +169,19 @@ Em **Explore**, selecione a fonte de dados correspondente:
   cgroup ao cAdvisor.
 - **Traces (Tempo):** filtre por `service.name = "b3-pipelines-airflow"` e
   procure spans `b3.duckdb.quack`, `duckdb.connect` ou `duckdb.query`.
+  Para o WebApp, filtre `service.name = "b3-web-app-api"` e procure
+  `http.server.request` ou `duckdb.query`.
+- **Logs do WebApp (Loki):** use `{service="web"} | json` para os registros JSON
+  em português. O campo `frontend_event` identifica eventos como
+  `consulta_concluida` e `falha_na_consulta`; `http_path` permite filtrar as
+  requisições da API. O texto SQL e os valores consultados não são enviados
+  nesses logs.
+- **Métricas do WebApp (Prometheus):** consulte
+  `b3_app_web_query_count_total`,
+  `b3_app_web_query_duration_seconds_bucket` e
+  `b3_app_web_http_server_requests_total`. As ações do frontend também
+  emitem `b3_app_web_frontend_event_count_total` e
+  `b3_app_web_frontend_action_duration_seconds_bucket`.
 
 Os nomes e labels disponíveis dependem da versão do cAdvisor e do runtime do
 Docker. Em um Docker Engine Linux nativo, o cAdvisor pode descobrir nomes e

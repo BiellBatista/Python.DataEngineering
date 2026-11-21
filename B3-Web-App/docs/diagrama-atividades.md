@@ -1,0 +1,67 @@
+# Diagrama de atividades
+
+## Inicialização da aplicação
+
+```mermaid
+flowchart TD
+    Setup["./setup.sh cria ou preserva .env"]
+    Start["./start.sh valida Docker, rede e Data Lake"]
+    Compose["docker compose up --build -d"]
+    Health["GET /api/health"]
+    Connected{"DuckDBServer disponível?"}
+    Ready["Interface disponível em WEB_PORT"]
+    Failure["Launcher encerra com instrução de diagnóstico"]
+
+    Setup --> Start --> Compose --> Health --> Connected
+    Connected -->|"sim"| Ready
+    Connected -->|"não"| Failure
+```
+
+O launcher não inicia o B3-Pipelines. Ele exige que a rede externa e o
+DuckDBServer já estejam ativos.
+
+## Carregamento do catálogo
+
+```mermaid
+flowchart TD
+    Request["GET /api/catalog"]
+    Connect["Conecta ao Quack"]
+    Scan["Percorre bronze e silver no Data Lake"]
+    Discover{"Parquets encontrados?"}
+    Register["Cria schemas/views em conexão in-memory"]
+    Response["Retorna layers/tables"]
+    Error["HTTP 503 com erro operacional"]
+
+    Request --> Connect --> Scan --> Discover
+    Discover -->|"sim"| Register --> Response
+    Discover -->|"não"| Response
+    Connect -->|"falha"| Error
+    Scan -->|"diretório ausente ou inacessível"| Error
+```
+
+## Execução de consulta
+
+```mermaid
+flowchart TD
+    Submit["Pessoa executa SQL"]
+    Parse["DuckDB extrai instruções"]
+    Valid{"Uma instrução SELECT?"}
+    Rejected["HTTP 400; métrica outcome=rejeitada"]
+    Limit{"MAX_QUERY_ROWS válido?"}
+    ConfigError["HTTP 500"]
+    Connect["Conecta catálogo ao DuckDBServer"]
+    Execute["Executa SELECT"]
+    Accepted{"Consulta aceita?"}
+    Failure["HTTP 400; métrica outcome=falha"]
+    Fetch["Busca MAX_QUERY_ROWS + 1"]
+    Return["Retorna limite, linhas e truncamento"]
+    Success["HTTP 200; métrica outcome=sucesso"]
+
+    Submit --> Parse --> Valid
+    Valid -->|"não"| Rejected
+    Valid -->|"sim"| Limit
+    Limit -->|"não"| ConfigError
+    Limit -->|"sim"| Connect --> Execute --> Accepted
+    Accepted -->|"erro SQL"| Failure
+    Accepted -->|"ok"| Fetch --> Return --> Success
+```

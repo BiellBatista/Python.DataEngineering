@@ -19,7 +19,7 @@ com Airflow, DuckDB/Quack e armazenamento Parquet em um Data Lake. Atualmente,
 inclui a pipeline de séries históricas COTAHIST, organizada nas camadas RAW,
 Bronze e Silver.
 
-### [B3-App-Web](B3-App-Web/README.md)
+### [B3-Web-App](B3-Web-App/README.md)
 
 Aplicação web para explorar datasets Parquet das camadas Bronze e Silver com
 uma interface SQL em Angular e Bootstrap, API FastAPI e consultas executadas

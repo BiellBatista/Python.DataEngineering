@@ -2,7 +2,7 @@
   "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
   "newProjectRoot": "projects",
   "projects": {
-    "b3-app-web": {
+    "b3-web-app": {
       "architect": {
         "build": {
           "builder": "@angular/build:application",
@@ -27,7 +27,7 @@
           "options": {
             "browser": "src/main.ts",
             "index": "src/index.html",
-            "outputPath": "dist/b3-app-web",
+            "outputPath": "dist/b3-web-app",
             "polyfills": [
               "zone.js"
             ],

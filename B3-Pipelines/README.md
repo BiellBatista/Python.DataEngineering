@@ -186,7 +186,7 @@ banco do Airflow entre reinicializações. `docker compose down` não o remove;
 
 A rede Docker compartilhada pelos serviços tem o nome estável
 `B3_DOCKER_NETWORK` (padrão `b3-pipelines_airflow_network`). Outros projetos
-locais, como o [B3-App-Web](../B3-App-Web/README.md), podem ingressar nessa
+locais, como o [B3-Web-App](../B3-Web-App/README.md), podem ingressar nessa
 rede para conectar-se ao DuckDBServer sem publicar a porta Quack no host.
 
 ## Setup
