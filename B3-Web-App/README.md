@@ -114,11 +114,12 @@ versionado. Um `.env` existente não é sincronizado quando `.env.example` muda;
 variáveis opcionais ausentes usam os padrões do Compose ou do backend.
 
 O launcher também cria `backend/venv` com as dependências do
-`backend/pyproject.toml` e instala os pacotes do frontend com `npm ci` se
-`frontend/node_modules` ainda não existir. Para essa primeira instalação local
-do frontend, tenha Node.js e npm disponíveis. A imagem Docker tem seu próprio
-ambiente Node e Python. O `package.json` atualmente define `build`, mas não
-um script `test` para o frontend.
+`backend/pyproject.toml`. Para o frontend, se o lockfile estiver ausente o
+launcher usa `npm install` para gerar `frontend/package-lock.json`; se o
+lockfile existir, mas `frontend/node_modules` não, usa `npm ci`. Para essas
+instalações locais, tenha Node.js e npm disponíveis. A imagem Docker tem seu
+próprio ambiente Node e Python. O `package.json` atualmente define `build`, mas
+não um script `test` para o frontend.
 
 Inicie B3-Pipelines primeiro para criar a rede compartilhada e disponibilizar o
 DuckDBServer:

@@ -18,12 +18,17 @@ if [[ ! -x "${VENV_PYTHON}" ]]; then
     "${VENV_PYTHON}" -m pip install "${PROJECT_ROOT}/backend"
 fi
 
-if [[ ! -d "${PROJECT_ROOT}/frontend/node_modules" ]]; then
+FRONTEND_PATH="${PROJECT_ROOT}/frontend"
+if [[ ! -f "${FRONTEND_PATH}/package-lock.json" || ! -d "${FRONTEND_PATH}/node_modules" ]]; then
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
         echo "Node.js e npm são necessários para instalar as dependências locais do frontend." >&2
         exit 1
     fi
-    npm --prefix "${PROJECT_ROOT}/frontend" ci
+    if [[ -f "${FRONTEND_PATH}/package-lock.json" ]]; then
+        npm --prefix "${FRONTEND_PATH}" ci
+    else
+        npm --prefix "${FRONTEND_PATH}" install
+    fi
 fi
 
 exec "${VENV_PYTHON}" "${PROJECT_ROOT}/setup/start.py"
