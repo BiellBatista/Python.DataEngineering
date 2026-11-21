@@ -47,19 +47,21 @@ usada pelo Compose do B3-Pipelines.
 ## Setup e operação
 
 ```sh
-./setup.sh
 ./start.sh
 docker compose ps
 docker compose logs --tail=100 web
 ./stop.sh
 ```
 
-`./setup.sh` cria `.env` local preservando qualquer configuração existente.
-Quando disponível, reutiliza `B3_DATA_LAKE_ROOT`, `B3_DOCKER_NETWORK` e
-`QUACK_TOKEN` do `.env` do B3-Pipelines.
+`./start.sh` cria `.env` se ainda não existir, preservando qualquer configuração
+existente. Quando disponível, reutiliza `B3_DATA_LAKE_ROOT`, `B3_DOCKER_NETWORK`
+e `QUACK_TOKEN` do `.env` do B3-Pipelines. Também prepara `backend/venv` e,
+quando `frontend/node_modules` estiver ausente, instala as dependências do
+frontend com `npm ci`.
 
-`./start.sh` exige Docker Compose, `.env`, diretório do Data Lake e rede externa
-existente. Ele aguarda `/api/health` por até cinco minutos.
+Configure a raiz do Data Lake e o token compartilhado antes de iniciar. O
+launcher exige Docker Compose, diretório do Data Lake e rede externa existente.
+Ele aguarda `/api/health` por até cinco minutos.
 
 ## Segurança e persistência
 

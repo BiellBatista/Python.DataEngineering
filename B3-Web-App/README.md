@@ -105,17 +105,20 @@ Para detalhes por escopo, consulte [a documentação da aplicação](docs/index.
 
 ## Configuração e execução
 
-Na primeira execução, prepare o arquivo local de ambiente:
-
-```sh
-./setup.sh
-```
-
-O setup importa automaticamente `B3_DATA_LAKE_ROOT`,
+O `./start.sh` cria `.env` quando necessário, preservando qualquer arquivo já
+existente. Na primeira execução, importa automaticamente `B3_DATA_LAKE_ROOT`,
 `B3_DOCKER_NETWORK` e `QUACK_TOKEN` de `../B3-Pipelines/.env`, quando esse
 arquivo existe. Revise `.env`; a raiz do Data Lake e o token devem ser os
 mesmos usados pelo DuckDBServer. O arquivo `.env` é local e não deve ser
-versionado.
+versionado. Um `.env` existente não é sincronizado quando `.env.example` muda;
+variáveis opcionais ausentes usam os padrões do Compose ou do backend.
+
+O launcher também cria `backend/venv` com as dependências do
+`backend/pyproject.toml` e instala os pacotes do frontend com `npm ci` se
+`frontend/node_modules` ainda não existir. Para essa primeira instalação local
+do frontend, tenha Node.js e npm disponíveis. A imagem Docker tem seu próprio
+ambiente Node e Python. O `package.json` atualmente define `build`, mas não
+um script `test` para o frontend.
 
 Inicie B3-Pipelines primeiro para criar a rede compartilhada e disponibilizar o
 DuckDBServer:
@@ -213,9 +216,10 @@ diagramas UML/Mermaid por escopo:
 
 O Dockerfile compila o frontend Angular em Node.js e o entrega como arquivos
 estáticos servidos pelo FastAPI. O backend usa Python 3.15 e DuckDB 2.0.
-Execute os testes unitários do backend com:
+O `./start.sh` cria `backend/venv` e instala as dependências do
+`backend/pyproject.toml` na primeira execução. Use esse ambiente para executar
+os testes unitários do backend:
 
 ```sh
-python3 -m pip install -r requirements.txt
-python3 -m unittest discover -s tests -v
+backend/venv/bin/python -m unittest discover -s tests -v
 ```

@@ -173,7 +173,7 @@ host e não é apagado por `down -v`.
 
 ```mermaid
 flowchart LR
-    Example[".env.example"] -->|"copiar e preencher"| Env[".env local<br/>credenciais e parâmetros"]
+    Example[".env.example"] -->|"start.sh copia se ausente"| Env[".env local<br/>credenciais e parâmetros"]
     Env -->|"interpolação"| Compose["Docker Compose"]
     Compose -->|"build.args"| Images["Build das imagens<br/>AIRFLOW_BASE_IMAGE<br/>DUCKDB_BASE_IMAGE"]
     Compose -->|"env_file + environment"| Airflow["Containers Airflow"]
@@ -182,19 +182,26 @@ flowchart LR
     Images --> Runtime
 ```
 
-Use `.env.example` como modelo, mantenha `.env` local e fora do Git, gere
-credenciais distintas para cada segredo e restrinja o arquivo:
+`./start.sh` cria `.env` a partir de `.env.example` se ele ainda não existir,
+com permissões restritas, e preserva configurações existentes. O arquivo não
+é sincronizado automaticamente com alterações futuras do exemplo. Também é
+possível copiá-lo manualmente. Mantenha `.env` fora do Git e gere credenciais
+distintas para cada segredo:
 
 ```sh
 cp .env.example .env
 chmod 600 .env
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 python3 -c "import secrets; print(secrets.token_urlsafe(64))"
 ```
 
-O comando gera um valor para copiar localmente como chave JWT. Gere valores
-independentes para `AIRFLOW_DB_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD` e
-`QUACK_TOKEN`; não reutilize a chave JWT. Nunca coloque valores reais de
-credenciais neste documento ou no `.env.example`.
+Gere valores independentes para `AIRFLOW_DB_PASSWORD`,
+`AIRFLOW_ADMIN_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` e `QUACK_TOKEN`; use outro
+valor como chave JWT. Nunca coloque valores reais de credenciais neste
+documento ou no `.env.example`.
 
 ### Variáveis do `.env.example`
 
@@ -210,6 +217,8 @@ credenciais neste documento ou no `.env.example`.
 | `AIRFLOW_DB_PASSWORD` | PostgreSQL, inicialização e connection string Airflow | Senha do usuário `airflow`; use valor URL-safe. Alterá-la no `.env` não troca a senha já persistida no volume PostgreSQL. |
 | `AIRFLOW_ADMIN_USERNAME` | `airflow-init` | Nome do usuário inicial da UI; exemplo `admin`. |
 | `AIRFLOW_ADMIN_PASSWORD` | `airflow-init` | Senha do usuário inicial da UI. A variável de bootstrap não rotaciona automaticamente uma conta já criada. |
+| `GRAFANA_ADMIN_USER` | Compose -> `GF_SECURITY_ADMIN_USER` no `otel-lgtm` | Usuário administrador inicial do Grafana; padrão `admin`. |
+| `GRAFANA_ADMIN_PASSWORD` | Compose -> `GF_SECURITY_ADMIN_PASSWORD` no `otel-lgtm` | Senha forte e exclusiva do administrador do Grafana; é obrigatória. Para uma instalação já inicializada, faça a rotação da senha na própria aplicação. |
 | `B3_DATA_LAKE_ROOT` | Interpolação do bind mount | Caminho absoluto no host visível ao Docker, por exemplo `/mnt/d/b3_datalake`. Dentro dos containers, o destino é `/data-lake`. |
 | `QUACK_TOKEN` | Servidor DuckDB e clientes Airflow | Segredo compartilhado para autenticar conexões Quack. Gere um token exclusivo e mantenha-o apenas no `.env` local. |
 | `DUCKDB_HOST` | Cliente DuckDB nos containers Airflow | Nome DNS do serviço dentro da bridge; no Compose, `duckdb-server`. Em execução local sem Quack, deixe sem definição. |

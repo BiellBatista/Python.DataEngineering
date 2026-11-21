@@ -4,15 +4,15 @@
 
 ```mermaid
 flowchart TD
-    Setup["./setup.sh cria ou preserva .env"]
-    Start["./start.sh valida Docker, rede e Data Lake"]
+    Start["./start.sh cria .env/venv se necessário"]
+    Validate["Valida Docker, rede e Data Lake"]
     Compose["docker compose up --build -d"]
     Health["GET /api/health"]
     Connected{"DuckDBServer disponível?"}
     Ready["Interface disponível em WEB_PORT"]
     Failure["Launcher encerra com instrução de diagnóstico"]
 
-    Setup --> Start --> Compose --> Health --> Connected
+    Start --> Validate --> Compose --> Health --> Connected
     Connected -->|"sim"| Ready
     Connected -->|"não"| Failure
 ```

@@ -14,6 +14,47 @@ STARTUP_TIMEOUT_SECONDS = 300
 AIRFLOW_DAG_ID = "b3_cotahist_medallion_pipeline"
 
 
+def read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() and not key.lstrip().startswith("#"):
+            values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def validate_environment(env_file: Path) -> None:
+    values = read_env(env_file)
+    required = (
+        "B3_DATA_LAKE_ROOT",
+        "AIRFLOW_DB_PASSWORD",
+        "AIRFLOW_ADMIN_PASSWORD",
+        "GRAFANA_ADMIN_PASSWORD",
+        "QUACK_TOKEN",
+        "AIRFLOW__API_AUTH__JWT_SECRET",
+    )
+    configured = {
+        name: os.environ.get(name, values.get(name, ""))
+        for name in required
+    }
+    missing = [
+        name
+        for name in required
+        if not configured[name] or configured[name].startswith("replace-with-")
+    ]
+    if missing:
+        raise ValueError(
+            "Configure estas variáveis em .env antes de iniciar: "
+            + ", ".join(missing)
+        )
+
+    data_lake_root = Path(configured["B3_DATA_LAKE_ROOT"]).expanduser()
+    if not data_lake_root.is_dir():
+        raise ValueError(
+            f"B3_DATA_LAKE_ROOT não existe ou não é um diretório: {data_lake_root}"
+        )
+
+
 def configured_port(environment_variable: str, default: int) -> int:
     port = os.environ.get(environment_variable)
     if port is None:
@@ -72,18 +113,25 @@ def run_compose(*arguments: str) -> None:
 def main() -> int:
     env_file = PROJECT_ROOT / ".env"
     if not env_file.is_file():
-        print(
-            "Arquivo .env não encontrado. Copie .env.example para .env, "
-            "configure as credenciais e B3_DATA_LAKE_ROOT e tente novamente.",
-            file=sys.stderr,
-        )
-        return 1
-
-    if shutil.which("docker") is None:
-        print("Docker não encontrado. Instale o Docker com Docker Compose v2.", file=sys.stderr)
-        return 1
+        try:
+            with env_file.open("x", encoding="utf-8") as destination:
+                destination.write(
+                    (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
+                )
+            os.chmod(env_file, 0o600)
+            print(f"Arquivo de ambiente criado: {env_file}")
+        except FileExistsError:
+            pass
+        except OSError as error:
+            print(f"Não foi possível criar o arquivo .env: {error}", file=sys.stderr)
+            return 1
 
     try:
+        validate_environment(env_file)
+        if shutil.which("docker") is None:
+            print("Docker não encontrado. Instale o Docker com Docker Compose v2.", file=sys.stderr)
+            return 1
+
         airflow_port = configured_port("AIRFLOW_PORT", 8080)
         grafana_port = configured_port("GRAFANA_PORT", 3000)
         run_compose("config", "--quiet")

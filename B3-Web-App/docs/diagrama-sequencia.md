@@ -11,7 +11,8 @@ sequenceDiagram
     participant Quack
 
     Operador->>Launcher: ./start.sh
-    Launcher->>Launcher: valida .env, rede e diretório
+    Launcher->>Launcher: cria .env/venv se necessário
+    Launcher->>Launcher: valida configuração, rede e diretório
     Launcher->>Docker: docker compose up --build -d
     Launcher->>API: GET /api/health
     API->>Quack: conecta Quack e executa SELECT 1

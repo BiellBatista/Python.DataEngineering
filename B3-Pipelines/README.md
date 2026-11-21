@@ -210,17 +210,13 @@ operar os serviços, consulte os capítulos
 O significado e o destino de cada variável estão em
 [`.env`: carregamento, variáveis e exemplos](docs/infraestrutura.md#env-configuracao).
 
-Dentro de `B3-Pipelines`, `.env` é local e não deve ser versionado:
-
-```sh
-cd B3-Pipelines
-cp .env.example .env
-```
-
-Se `.env` já existir, preserve-o e edite somente as variáveis necessárias.
-Configure `B3_DATA_LAKE_ROOT` com o caminho absoluto do diretório persistente
-visível ao Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL
-quando necessário (por exemplo, o resultado de `id -u`).
+`.env` é local e não deve ser versionado. Na primeira execução de `./start.sh`,
+o arquivo é criado com base em `.env.example` e permissões restritas. O
+launcher preserva qualquer `.env` existente; ele não sincroniza alterações
+futuras do exemplo. Configure
+`B3_DATA_LAKE_ROOT` com o caminho absoluto do diretório persistente visível ao
+Docker. Ajuste `AIRFLOW_UID` para o UID do usuário no Linux/WSL quando
+necessário (por exemplo, o resultado de `id -u`).
 
 `AIRFLOW_BASE_IMAGE` e `DUCKDB_BASE_IMAGE` definem as imagens base dos
 Dockerfiles correspondentes e são passadas como argumentos de build pelo
@@ -231,10 +227,11 @@ API de execução.
 Se `AIRFLOW_PORT` estiver exportada no shell que inicia o launcher, ela
 prevalece sobre o valor do `.env`.
 
-Gere quatro valores aleatórios distintos para senhas, token e chave JWT; copie
+Gere cinco valores aleatórios distintos para senhas, token e chave JWT; copie
 cada resultado para sua variável no `.env`, sem reutilizar o mesmo valor:
 
 ```sh
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -247,14 +244,18 @@ Preencha:
 AIRFLOW_DB_PASSWORD=<primeiro valor>
 AIRFLOW_ADMIN_USERNAME=admin
 AIRFLOW_ADMIN_PASSWORD=<segundo valor>
-QUACK_TOKEN=<terceiro valor>
-AIRFLOW__API_AUTH__JWT_SECRET=<quarto valor>
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=<terceiro valor>
+QUACK_TOKEN=<quarto valor>
+AIRFLOW__API_AUTH__JWT_SECRET=<quinto valor>
 ```
 
 `AIRFLOW_DB_PASSWORD` deve permanecer compatível com URL. Os valores gerados
-por `token_urlsafe` atendem a esse requisito. A chave JWT precisa ser idêntica
-no scheduler e no API server para autenticar as tasks. Restrinja as permissões
-do arquivo local:
+por `token_urlsafe` atendem a esse requisito. A senha do Grafana configura a
+conta inicial do serviço observabilidade; em instalações já inicializadas,
+rotacione-a pelo próprio Grafana. A chave JWT precisa ser idêntica no scheduler
+e no API server para autenticar as tasks. Restrinja as permissões do arquivo
+local:
 
 ```sh
 chmod 600 .env
@@ -271,7 +272,7 @@ Para detalhes de DNS, portas, dependências e saúde dos serviços, consulte
 [containers, rede e comunicação](docs/infraestrutura.md#containers-rede) e
 [operação e diagnóstico](docs/infraestrutura.md#operacao).
 
-Na pasta `B3-Pipelines`, depois de configurar o `.env`, execute:
+Na pasta `B3-Pipelines`, configure o `.env` e execute:
 
 ```sh
 ./start.sh
@@ -338,14 +339,17 @@ stack Airflow com DuckDB remoto, use o Compose conforme as instruções acima.
 
 ### Testes
 
-Instale as dependências de teste e execute a suíte com cobertura de todo o
-código Python em `src/`:
+O `./start.sh` cria `venv` e instala o pacote com as dependências de teste na
+primeira execução. Para preparar ou atualizar manualmente o ambiente de
+desenvolvimento, e executar a suíte com cobertura de todo o código Python em
+`src/`:
 
 ```sh
-python -m pip install -e '.[test]'
-PYTHONPATH=src coverage run -m unittest discover -s tests -t . -p 'test_*.py' -v
-coverage report --fail-under=100
-python -m compileall -q src airflow/dags duckdb-server
+python3 -m venv venv
+venv/bin/python -m pip install -e '.[test]'
+PYTHONPATH=src venv/bin/python -m coverage run -m unittest discover -s tests -t . -p 'test_*.py' -v
+venv/bin/python -m coverage report --fail-under=100
+venv/bin/python -m compileall -q src airflow/dags duckdb-server
 ```
 
 ## Segurança e operação

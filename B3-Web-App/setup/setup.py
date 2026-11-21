@@ -31,8 +31,18 @@ def initialize_environment() -> None:
                 content,
             )
 
-    ENV_FILE.write_text(content, encoding="utf-8")
-    os.chmod(ENV_FILE, 0o600)
+    try:
+        descriptor = os.open(
+            ENV_FILE,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError:
+        print(f"Preservando a configuração existente: {ENV_FILE}")
+        return
+
+    with os.fdopen(descriptor, "w", encoding="utf-8") as env_file:
+        env_file.write(content)
     print(f"Arquivo de ambiente criado: {ENV_FILE}")
     if pipelines_values:
         print("Valores existentes do B3-Pipelines foram reutilizados quando disponíveis.")

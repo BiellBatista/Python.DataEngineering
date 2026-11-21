@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "b3-web-app-backend"
+version = "0.1.0"
+description = "Backend FastAPI do B3 App Web"
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb==2.0.0",
+    "fastapi>=0.115,<1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "pytz>=2024.1",
+    "uvicorn>=0.34,<1",
+]
+
+[tool.setuptools]
+packages = ["backend"]
+package-dir = {backend = "."}
