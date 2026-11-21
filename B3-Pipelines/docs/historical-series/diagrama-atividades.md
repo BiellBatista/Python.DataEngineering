@@ -6,19 +6,20 @@
 flowchart TD
     Start((Início))
     Trigger["Disparar DAG manualmente"]
-    Params["Ler start_year, end_year,<br/>memory_limit e threads"]
+    Params["Ler intervalo, recursos e seletores Gold"]
     Range{"1986 <= início <= fim <= 2030?"}
     Invalid["Falhar execução<br/>parâmetros inválidos"]
     Expand["Criar task group mapeado<br/>para cada ano inclusivo"]
     Parallel{"Há grupo de ano pronto?"}
     YearFlow["Executar atividades<br/>do ano"]
+    Gold["Depois dos grupos anuais<br/>gerar candles Gold por ticker"]
     Finish((Fim))
 
     Start --> Trigger --> Params --> Range
     Range -->|"não"| Invalid
     Range -->|"sim"| Expand --> Parallel
     Parallel -->|"há ano pronto"| YearFlow --> Parallel
-    Parallel -->|"todos os grupos encerrados"| Finish
+    Parallel -->|"todos os grupos encerrados"| Gold --> Finish
 ```
 
 **Leitura:** o intervalo gera uma atividade independente por ano. O Airflow
@@ -67,3 +68,23 @@ após três minutos), assim como outras falhas operacionais. Silver prepara
 uma saída em staging e promove somente a partição do ano; a proteção/restauração
 refere-se à implementação de promoção, não a uma transação do Data Lake
 inteiro.
+
+## Geração Gold após os anos
+
+```mermaid
+flowchart TD
+    AllSilver["Todos os grupos anuais Silver concluídos"]
+    Select["Selecionar tickers exatos,<br/>prefixo ou sufixo"]
+    Copy["DuckDB lê Silver e filtra candles válidos"]
+    Stage["Gravar staging Parquet<br/>PARTITION_BY (ticker)"]
+    Promote["Promover cada partição ticker=<TICKER>"]
+    Done["Gold concluída"]
+    Failure["Falha operacional<br/>demais partições preservadas"]
+
+    AllSilver --> Select --> Copy --> Stage --> Promote --> Done
+    Copy -->|"consulta falhou"| Failure
+    Promote -->|"promoção falhou"| Failure
+```
+
+Uma única task Gold é executada após todos os grupos anuais. Ela lê a Silver
+consolidada e substitui apenas os diretórios dos tickers gerados.

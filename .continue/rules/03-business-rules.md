@@ -43,7 +43,15 @@ de verdade detalhada é
 - `preco_fechamento` representa `PREULT` (último negócio), não o fechamento
   oficial do pregão.
 
+## Camada Gold atual
+
+- Gerar candles somente após todos os lotes anuais Silver concluídos.
+- Aplicar a seleção por lista exata, prefixo ou sufixo, sem combinar seletores.
+- Manter registros com mercado `010`, ticker/data preenchidos e relações OHLC
+  consistentes.
+- Particionar por ticker e preservar partições não selecionadas.
+
 ## Escopo futuro
 
 Não aplicar à pipeline atual fórmulas de média móvel, variação diária ou
-rankings: não há camada Gold ou cálculo dessas métricas implementado.
+rankings: não há transformação Gold desses indicadores implementada.

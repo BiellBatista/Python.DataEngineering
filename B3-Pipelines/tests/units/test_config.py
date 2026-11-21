@@ -30,6 +30,7 @@ class ConfigTests(unittest.TestCase):
             "B3_RAW_COTAHIST_DIR": "/tmp/raw",
             "B3_BRONZE_COTAHIST_DIR": "/tmp/bronze",
             "B3_SILVER_COTAHIST_DIR": "/tmp/silver",
+            "B3_GOLD_CANDLES_DIR": "/tmp/gold",
             "DUCKDB_THREADS": "3",
             "DUCKDB_PORT": "9495",
             "BRONZE_MAX_WORKERS": "2",
@@ -43,6 +44,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(config.RAW_COTAHIST_DIR, "/tmp/raw")
                 self.assertEqual(config.BRONZE_COTAHIST_DIR, "/tmp/bronze")
                 self.assertEqual(config.SILVER_COTAHIST_DIR, "/tmp/silver")
+                self.assertEqual(config.GOLD_CANDLES_DIR, "/tmp/gold")
                 self.assertEqual(config.DUCKDB_THREADS, 3)
                 self.assertEqual(config.DUCKDB_PORT, 9495)
                 self.assertEqual(config.BRONZE_MAX_WORKERS, 2)

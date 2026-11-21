@@ -17,6 +17,10 @@ SILVER_COTAHIST_DIR = os.getenv(
     "B3_SILVER_COTAHIST_DIR",
     str(DATA_LAKE_ROOT / "silver" / "cotacoes_historicas"),
 )
+GOLD_CANDLES_DIR = os.getenv(
+    "B3_GOLD_CANDLES_DIR",
+    str(DATA_LAKE_ROOT / "gold" / "candles"),
+)
 
 
 def _positive_int_from_env(name: str, default: int) -> int:

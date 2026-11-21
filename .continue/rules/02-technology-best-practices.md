@@ -21,8 +21,10 @@ description: Práticas confirmadas no B3 Pipelines para Python, Airflow, DuckDB 
 
 - A configuração atual usa compressão ZSTD e `ROW_GROUP_SIZE` 122.880.
 - Use partições Hive coerentes com o contrato de saída da pipeline. Na série
-  histórica, Bronze particiona por ano e timestamp de ingestão; Silver por ano.
-- A saída Silver atual não habilita `PER_THREAD_OUTPUT`.
+  histórica, Bronze particiona por ano e timestamp de ingestão; Silver por ano;
+  Gold de candles particiona por ticker.
+- Silver não habilita `PER_THREAD_OUTPUT`; Gold usa a configuração compartilhada
+  `PARQUET_PER_THREAD_OUTPUT`.
 - Evite materializar conjuntos grandes no processo Python quando SQL no
   DuckDB puder fazer a operação.
 

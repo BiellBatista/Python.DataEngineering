@@ -16,6 +16,7 @@ flowchart LR
         DQ["data_qualities.data_quality"]
         Bronze["transformations.bronze"]
         Silver["transformations.silver"]
+        Gold["transformations.gold_candles"]
     end
     subgraph Shared["src"]
         Config["config"]
@@ -30,6 +31,7 @@ flowchart LR
     DAG --> DQ
     DAG --> Bronze
     DAG --> Silver
+    DAG --> Gold
     DQ --> Raw
     DQ --> Bronze
     DQ --> Connection
@@ -45,10 +47,15 @@ flowchart LR
     Silver --> Connection
     Silver --> Helpers
     Silver --> Exceptions
+    Gold --> Config
+    Gold --> Connection
+    Gold --> Helpers
+    Gold --> Exceptions
     Connection --> Config
     Main --> Config
     Main --> Bronze
     Main --> Silver
+    Main --> Gold
     RunSQL --> Config
     RunSQL --> Connection
 ```

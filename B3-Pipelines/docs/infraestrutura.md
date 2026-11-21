@@ -238,6 +238,7 @@ e mantenha os diretórios sob o bind mount:
 | `B3_RAW_COTAHIST_DIR` | `/data-lake/raw/cotahist` |
 | `B3_BRONZE_COTAHIST_DIR` | `/data-lake/bronze/cotacoes_historicas` |
 | `B3_SILVER_COTAHIST_DIR` | `/data-lake/silver/cotacoes_historicas` |
+| `B3_GOLD_CANDLES_DIR` | `/data-lake/gold/candles` |
 
 O Compose também define valores internos que não precisam ser repetidos no
 `.env`: `AIRFLOW__CORE__EXECUTOR=LocalExecutor`,

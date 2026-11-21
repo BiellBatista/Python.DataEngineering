@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import main
-from historical_series.transformations import bronze, silver
+from historical_series.transformations import bronze, gold_candles, silver
 
 
 class MainTests(unittest.TestCase):
@@ -15,6 +15,7 @@ class MainTests(unittest.TestCase):
         with (
             patch("main.execute_bronze_load") as bronze_load,
             patch("main.execute_silver_load") as silver_load,
+            patch("main.execute_gold_candles_load") as gold_load,
         ):
             main.main()
 
@@ -26,17 +27,25 @@ class MainTests(unittest.TestCase):
         self.assertEqual(bronze_kwargs["ingestion_time"].utcoffset().total_seconds(), 0)
         self.assertEqual(bronze_kwargs["threads"], silver_kwargs["threads"])
         self.assertEqual(bronze_kwargs["memory_limit"], silver_kwargs["memory_limit"])
+        gold_load.assert_called_once_with(
+            memory_limit=bronze_kwargs["memory_limit"],
+            threads=bronze_kwargs["threads"],
+        )
 
     def test_module_entry_point_invokes_main(self) -> None:
         source = Path(main.__file__)
         with (
             patch.object(bronze, "execute_bronze_load") as bronze_load,
             patch.object(silver, "execute_silver_load") as silver_load,
+            patch.object(
+                gold_candles, "execute_gold_candles_load"
+            ) as gold_load,
         ):
             runpy.run_path(str(source), run_name="__main__")
 
         bronze_load.assert_called_once()
         silver_load.assert_called_once()
+        gold_load.assert_called_once()
 
 
 if __name__ == "__main__":

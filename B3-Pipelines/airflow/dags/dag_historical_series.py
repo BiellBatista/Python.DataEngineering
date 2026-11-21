@@ -26,6 +26,9 @@ from historical_series.data_qualities import (
     validate_raw_quality,
 )
 from historical_series.transformations.bronze import execute_bronze_load
+from historical_series.transformations.gold_candles import (
+    execute_gold_candles_load,
+)
 from historical_series.transformations.silver import execute_silver_load
 
 @dag(
@@ -76,6 +79,28 @@ from historical_series.transformations.silver import execute_silver_load
                 "Limite global de threads da instância DuckDB. Em Docker, deve "
                 "corresponder a DUCKDB_THREADS no .env."
             ),
+        ),
+        "tickers": Param(
+            [],
+            type="array",
+            items={"type": "string"},
+            title="Tickers Gold",
+            description=(
+                "Lista de tickers exatos para atualizar na Gold. Deixe vazia "
+                "para processar todos ou use start_with/end_with."
+            ),
+        ),
+        "start_with": Param(
+            "",
+            type="string",
+            title="Ticker começa com",
+            description="Seleciona tickers Gold que começam com este texto.",
+        ),
+        "end_with": Param(
+            "",
+            type="string",
+            title="Ticker termina com",
+            description="Seleciona tickers Gold que terminam com este texto.",
         ),
     },
     tags=["b3", "market_data", "duckdb", "medallion", "cotahist"],
@@ -176,8 +201,23 @@ def b3_cotahist_pipeline():
         quality_year = check_bronze_step(bronze_year)
         run_silver_step(quality_year)
 
+    @task(task_id="load_gold_candles")
+    def run_gold_candles_step(**context: Any) -> None:
+        """Gera as partições Gold após todas as partições Silver do lote."""
+        params = context["params"]
+        print("Iniciando geração dos candles Gold.")
+        execute_gold_candles_load(
+            tickers=params["tickers"] or None,
+            start_with=params["start_with"] or None,
+            end_with=params["end_with"] or None,
+            memory_limit=str(params["memory_limit"]),
+            threads=int(params["threads"]),
+        )
+        print("Geração dos candles Gold concluída.")
+
     years = get_years_to_process()
-    process_year.expand(year=years)
+    silver_groups = process_year.expand(year=years)
+    silver_groups >> run_gold_candles_step()
 
 
 # Instanciação da DAG no escopo do módulo

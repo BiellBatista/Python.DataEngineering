@@ -9,12 +9,12 @@ consultas `SELECT` no DuckDBServer compartilhado do B3-Pipelines, usando o
 protocolo Quack.
 
 O objetivo é fornecer exploração local e interativa das informações já
-preparadas nas camadas Bronze e Silver, sem replicar a engenharia de dados nem
+preparadas nas camadas Bronze, Silver e Gold, sem replicar a engenharia de dados nem
 publicar o servidor DuckDB no host.
 
 ## Escopo
 
-- Descobre datasets Bronze e Silver disponíveis no Data Lake.
+- Descobre datasets Bronze, Silver e Gold disponíveis no Data Lake.
 - Registra views locais para cada diretório ou arquivo Parquet encontrado.
 - Permite consulta SQL somente leitura pelo editor da interface.
 - Limita o número de linhas retornadas por consulta.
@@ -23,7 +23,7 @@ publicar o servidor DuckDB no host.
 
 ### O que não faz
 
-- Não orquestra DAGs nem cria, altera ou promove dados Bronze/Silver.
+- Não orquestra DAGs nem cria, altera ou promove dados Bronze/Silver/Gold.
 - Não baixa dados da B3, não mantém um catálogo persistente e não usa autenticação
   de usuário.
 - Não aceita SQL que não seja uma única instrução `SELECT`.
@@ -84,7 +84,7 @@ arquivos Parquet visíveis no Data Lake.
 ## Fluxo funcional
 
 1. O frontend Angular carrega o catálogo pela API.
-2. A API identifica diretórios Bronze/Silver que têm Parquet e cria views
+2. A API identifica diretórios Bronze/Silver/Gold que têm Parquet e cria views
    qualificadas em memória no DuckDB.
 3. A pessoa seleciona uma tabela ou altera o SQL no editor.
 4. A API valida que existe exatamente uma instrução `SELECT`.
@@ -139,9 +139,10 @@ externa e os serviços do B3-Pipelines permanecem ativos.
 ## Uso
 
 O catálogo agrupa os diretórios de datasets encontrados em
-`<B3_DATA_LAKE_ROOT>/bronze` e `<B3_DATA_LAKE_ROOT>/silver`. Selecione uma tabela
-para preencher o editor, altere o SQL e clique em **Executar**. Os nomes ficam
-qualificados pelo schema, por exemplo:
+`<B3_DATA_LAKE_ROOT>/bronze`, `<B3_DATA_LAKE_ROOT>/silver` e
+`<B3_DATA_LAKE_ROOT>/gold`. Selecione uma tabela para preencher o editor,
+altere o SQL e clique em **Executar**. Os nomes ficam qualificados pelo schema,
+por exemplo:
 
 ```sql
 SELECT *

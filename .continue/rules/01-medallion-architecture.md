@@ -7,9 +7,10 @@ description: Camadas efetivamente implementadas no B3 Pipelines e convenções a
 ## Estado atual
 
 O repositório atualmente implementa a pipeline da série histórica COTAHIST da
-B3, com entradas RAW e saídas Parquet nas camadas Bronze e Silver. Gold é uma
-possibilidade futura; não há DAG, transformação ou dataset Gold implementado.
-Não trate convenções futuras como comportamento disponível.
+B3, com entradas RAW e saídas Parquet nas camadas Bronze, Silver e Gold.
+Gold possui o produto específico `candles`, particionado por ticker. Não trate
+outras convenções Gold ou métricas como comportamento disponível sem uma
+transformação correspondente.
 
 O caminho do host é configurado por `B3_DATA_LAKE_ROOT` e montado nos
 containers como `/data-lake`. O padrão local do código é `/mnt/d/b3_datalake`;
@@ -47,6 +48,15 @@ em Docker, o valor do host depende do `.env`.
   `/data-lake/silver/cotacoes_historicas/year=AAAA/`.
 - A escrita ocorre em staging; a promoção substitui apenas o ano solicitado e
   procura preservar/restaurar a versão anterior se a operação falhar.
+
+### Gold
+
+- A carga Gold de candles só começa depois de todas as partições Silver do lote.
+- A transformação lê o dataset Silver, valida registros de mercado `010` e
+  grava o contrato OHLC em `gold/candles/ticker=<TICKER>/`.
+- Cada ticker usa staging próprio e somente as partições geradas são promovidas.
+- `preco_fechamento` continua representando `PREULT` (último negócio); não use o
+  campo como fechamento oficial.
 
 ## Convenções para evolução
 

@@ -8,7 +8,7 @@
 
 Esta DAG implementa o processamento da série histórica de cotações da B3 no
 layout posicional COTAHIST. O objetivo é transformar TXT anual em dados
-Parquet auditáveis nas camadas Bronze e Silver, com validações de qualidade
+Parquet auditáveis nas camadas Bronze, Silver e Gold, com validações de qualidade
 entre as etapas. Airflow coordena as tarefas; DuckDB executa as leituras,
 transformações SQL e escritas Parquet.
 
@@ -28,13 +28,15 @@ inclusivo e deve estar entre 1986 e 2030.
   ativo, data de pregão e tipo de mercado e mantém linhagem.
 - Substitui somente a partição Silver anual solicitada; se a escrita ou
   promoção falhar, tenta preservar ou restaurar a versão anterior.
+- Gera candles OHLC na Gold, particionados por ticker, filtrando registros
+  inconsistentes e atualizando apenas os tickers selecionados.
 
 ## O que não faz
 
 - Não baixa arquivos nem consulta uma API da B3. Os TXT devem estar disponíveis
   antes da execução.
-- Não cria camada Gold, indicadores de negócio, dashboard, API de consulta ou
-  catálogo de dados.
+- Não cria dashboard, API de consulta ou catálogo de dados. A Gold contém
+  candles OHLC, não indicadores ou preços oficiais de fechamento.
 - Não representa o preço oficial de fechamento do pregão: a coluna chamada
   `preco_fechamento` é extraída de `PREULT`, o preço do último negócio no
   layout COTAHIST.
@@ -57,13 +59,15 @@ Por padrão, para cada ano `AAAA`, espera o arquivo:
 No Compose, `/data-lake` corresponde ao diretório do host configurado por
 `B3_DATA_LAKE_ROOT`. Os caminhos podem ser sobrescritos por
 `B3_RAW_COTAHIST_DIR`, `B3_BRONZE_COTAHIST_DIR` e
-`B3_SILVER_COTAHIST_DIR`; no container, mantenha-os no volume compartilhado.
+`B3_SILVER_COTAHIST_DIR` e `B3_GOLD_CANDLES_DIR`; no container, mantenha-os no
+volume compartilhado.
 
 ```text
 /data-lake/
 ├── raw/cotahist/ano=AAAA/COTAHIST_A{AAAA}.TXT
 ├── bronze/cotacoes_historicas/year=AAAA/_ingested_date=<timestamp>/*.parquet
-└── silver/cotacoes_historicas/year=AAAA/*.parquet
+├── silver/cotacoes_historicas/year=AAAA/*.parquet
+└── gold/candles/ticker=VALE3/*.parquet
 ```
 
 Bronze preserva uma coluna `content` com a linha COTAHIST e campos de
@@ -75,8 +79,10 @@ execução, do arquivo RAW e do Parquet Bronze.
 
 Airflow valida o intervalo solicitado e expande uma task group por ano. Para
 cada ano, a validação RAW é uma barreira antes da gravação Bronze; a Data
-Quality Bronze é outra barreira antes da Silver. DuckDB/Quack acessa o mesmo
-volume compartilhado para ler e escrever arquivos. Falhas e tentativas são
+Quality Bronze é outra barreira antes da Silver. Depois que todos os anos da
+Silver terminam, a task Gold lê o dataset Silver completo e escreve as
+partições por ticker solicitadas. DuckDB/Quack acessa o mesmo volume
+compartilhado para ler e escrever arquivos. Falhas e tentativas são
 descritas em [regras e requisitos](regras-requisitos.md).
 
 ```mermaid
@@ -89,9 +95,10 @@ flowchart TD
     BronzeDQ["Validar a ingestão Bronze<br/>mais recente do ano"]
     Silver["Transformar e deduplicar<br/>registros de negociação"]
     Promote["Promover somente a partição<br/>Silver daquele ano"]
+    Gold["Gerar candles OHLC<br/>após todos os anos Silver"]
     Success["Ano concluído"]
     Failure["Falha no ano<br/>etapas seguintes bloqueadas"]
-    Lake[("Data Lake<br/>RAW / Bronze / Silver")]
+    Lake[("Data Lake<br/>RAW / Bronze / Silver / Gold")]
 
     Trigger --> Params --> Map
     Map --> RawDQ
@@ -100,11 +107,14 @@ flowchart TD
     Bronze --> BronzeDQ
     BronzeDQ -->|"aprovado"| Silver
     BronzeDQ -->|"reprovado"| Failure
-    Silver --> Promote --> Success
+    Silver --> Promote
+    Promote --> Gold
+    Gold --> Success
     Bronze -.->|"lê RAW e grava Bronze"| Lake
     BronzeDQ -.->|"lê Bronze recente"| Lake
     Silver -.->|"lê Bronze e grava staging"| Lake
     Promote -.->|"substitui partição anual"| Lake
+    Gold -.->|"lê Silver e grava ticker=..."| Lake
 ```
 
 ## C4 — C3: componentes da DAG
@@ -123,7 +133,9 @@ flowchart LR
             BronzeTask["Task Bronze<br/>coordena a carga"]
             QualityTask["Task Data Quality<br/>coordena validação Bronze"]
             SilverTask["Task Silver<br/>coordena transformação e promoção"]
+            GoldTask["Task Gold<br/>candles por ticker"]
             DAG --> RawTask --> BronzeTask --> QualityTask --> SilverTask
+            SilverTask --> GoldTask
         end
         Client["Cliente Python DuckDB<br/>abre conexão e envia SQL"]
         Quack["Servidor DuckDB/Quack<br/>processamento SQL e arquivos"]
@@ -137,10 +149,12 @@ flowchart LR
     BronzeTask --> Client
     QualityTask --> Client
     SilverTask --> Client
+    GoldTask --> Client
     Client -->|"protocolo Quack + token"| Quack
     RawTask -->|"lê RAW para validar"| Lake
     Quack -->|"lê TXT/Parquet e escreve Parquet"| Lake
     SilverTask -->|"promove partição no volume"| Lake
+    GoldTask -->|"promove tickers no volume"| Lake
 ```
 
 ## Documentação por escopo

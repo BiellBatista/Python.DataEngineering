@@ -26,7 +26,7 @@ DuckDBServer já estejam ativos.
 flowchart TD
     Request["GET /api/catalog"]
     Connect["Conecta ao Quack"]
-    Scan["Percorre bronze e silver no Data Lake"]
+    Scan["Percorre bronze, silver e gold no Data Lake"]
     Discover{"Parquets encontrados?"}
     Register["Cria schemas/views em conexão in-memory"]
     Response["Retorna layers/tables"]

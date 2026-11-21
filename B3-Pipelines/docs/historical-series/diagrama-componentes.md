@@ -44,6 +44,7 @@ flowchart TB
     DQ["data_qualities.data_quality<br/>validação estrutural e regras"]
     Bronze["transformations.bronze<br/>TXT para Parquet bruto"]
     Silver["transformations.silver<br/>parsing, deduplicação e promoção"]
+    Gold["transformations.gold_candles<br/>produto OHLC e promoção por ticker"]
     Connection["utils.duckdb_connection<br/>conexão local ou Quack"]
     Lake[("Arquivos do Data Lake")]
     Engine["DuckDB / Quack<br/>SQL e I/O Parquet"]
@@ -53,6 +54,7 @@ flowchart TB
     DAG --> DQ
     DAG --> Bronze
     DAG --> Silver
+    DAG --> Gold
     DQ --> Raw
     DQ --> Bronze
     DQ --> Connection
@@ -62,6 +64,8 @@ flowchart TB
     Silver --> Bronze
     Silver --> Connection
     Silver --> Errors
+    Gold --> Connection
+    Gold --> Errors
     Raw -->|"valida entrada"| Lake
     Connection --> Engine
     Engine -->|"lê e grava"| Lake
@@ -72,8 +76,9 @@ flowchart TB
 
 **Leitura:** Airflow aciona as funções de domínio e controla as dependências.
 Validação RAW acessa o arquivo no worker; consultas de conversão e validação
-Bronze passam por DuckDB. O estágio Silver também usa staging e promoção da
-partição no volume compartilhado.
+Bronze passam por DuckDB. Silver e Gold usam staging e promovem partições no
+volume compartilhado; Gold só é iniciada depois da conclusão de todos os
+grupos anuais Silver.
 
 Para os limites de rede, portas, autenticação e volumes, consulte
 [infraestrutura](../infraestrutura.md).

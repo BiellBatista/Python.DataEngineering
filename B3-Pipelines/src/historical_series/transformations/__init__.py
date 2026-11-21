@@ -1,1 +1,1 @@
-"""Transformações das camadas Bronze e Silver da série histórica."""
+"""Transformações Bronze/Silver e produtos específicos da Gold histórica."""

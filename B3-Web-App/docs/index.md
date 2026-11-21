@@ -6,9 +6,9 @@ o B3-Pipelines e a observabilidade.
 
 ## Objetivo
 
-Permitir a exploração somente leitura dos dados Bronze e Silver já persistidos
-no Data Lake, sem duplicar o pipeline de transformação nem publicar o servidor
-DuckDB no host.
+Permitir a exploração somente leitura dos dados Bronze, Silver e Gold já
+persistidos no Data Lake, sem duplicar o pipeline de transformação nem publicar
+o servidor DuckDB no host.
 
 ## Sumário
 
@@ -33,7 +33,7 @@ flowchart LR
     end
     Lake["B3-Pipelines<br/>Data Lake, DuckDBServer e observabilidade"]
 
-    User -->|"Consulta dados Bronze/Silver"| App
+    User -->|"Consulta dados Bronze/Silver/Gold"| App
     App -->|"Catálogo e consultas SELECT via Quack"| Lake
 ```
 

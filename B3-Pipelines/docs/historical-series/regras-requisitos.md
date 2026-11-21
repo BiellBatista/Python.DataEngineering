@@ -60,6 +60,25 @@ no código atual.
 7. Metadados incluem `_ingested_at` da Silver, `_bronze_ingested_at`,
    `_raw_source_file`, `_bronze_source_file` e `_dag_run_id`.
 
+### Camada Gold — candles
+
+1. A geração Gold só começa depois que todas as partições Silver do lote
+   terminarem; a consulta lê o dataset Silver completo.
+2. O destino padrão é `gold/candles/ticker=<TICKER>/`, particionado por ticker.
+   Somente as partições escritas são substituídas; tickers não selecionados
+   permanecem inalterados.
+3. São mantidos registros com ticker e data preenchidos, `tipo_mercado = 010`,
+   abertura e mínima positivas, mínima não superior à abertura/último negócio e
+   máxima não inferior à abertura/último negócio.
+4. A saída expõe `ticker`, `time` (data), `tipo_mercado`, `open`, `high`,
+   `low`, `close` e `volume_total`; os valores financeiros são
+   `DECIMAL(18, 2)`. `close` continua representando `PREULT` (último negócio).
+5. A task pode receber uma lista de tickers exatos, `start_with` para prefixo
+   ou `end_with` para sufixo. Os seletores são mutuamente exclusivos; sem
+   seletor, todos os tickers com candles válidos são processados.
+6. A escrita ocorre em staging e cada partição por ticker é promovida
+   individualmente, tentando restaurar a versão anterior se a promoção falhar.
+
 ## Requisitos funcionais
 
 | ID | Requisito |
@@ -74,6 +93,8 @@ no código atual.
 | RF-08 | Deve preservar os resultados Silver dos anos não solicitados e substituir apenas a partição anual processada. |
 | RF-09 | Deve propagar falhas operacionais à task do Airflow e permitir inspeção pelos estados/logs da execução. |
 | RF-10 | Deve receber `memory_limit` e `threads` como parâmetros; no modo Quack, devem coincidir com os limites globais do servidor. |
+| RF-11 | Deve gerar candles Gold após todas as partições Silver do lote, particionados por ticker. |
+| RF-12 | Deve permitir selecionar tickers exatos, por prefixo ou por sufixo e preservar as demais partições Gold. |
 
 ## Requisitos não funcionais e limites operacionais
 
@@ -97,8 +118,12 @@ no código atual.
 | `end_year` | Inteiro 1986–2030; padrão `B3_END_YEAR` | Inclusivo. |
 | `memory_limit` | Texto; padrão `DUCKDB_MEMORY_LIMIT` | Deve corresponder ao limite global no modo Quack. |
 | `threads` | Inteiro positivo; padrão `DUCKDB_THREADS` | Deve corresponder ao número global de threads no modo Quack. |
+| `tickers` | Lista de textos; padrão vazia | Lista exata para Gold; exclusiva de `start_with` e `end_with`. |
+| `start_with` | Texto; padrão vazio | Prefixo do ticker; exclusivo dos demais seletores. |
+| `end_with` | Texto; padrão vazio | Sufixo do ticker; exclusivo dos demais seletores. |
 
 Referências de implementação: [definição da DAG](../../airflow/dags/dag_historical_series.py),
 [validação de qualidade](../../src/historical_series/data_qualities/data_quality.py),
 [carga Bronze](../../src/historical_series/transformations/bronze.py) e
-[transformação Silver](../../src/historical_series/transformations/silver.py).
+[transformação Silver](../../src/historical_series/transformations/silver.py) e
+[transformação Gold de candles](../../src/historical_series/transformations/gold_candles.py).

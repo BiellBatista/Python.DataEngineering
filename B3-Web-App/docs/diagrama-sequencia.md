@@ -34,7 +34,7 @@ sequenceDiagram
     Pessoa->>Angular: abre ou atualiza a interface
     Angular->>API: GET /api/catalog
     API->>Quack: instala/carrega Quack e conecta
-    API->>Lake: procura Bronze/Silver/Parquet
+    API->>Lake: procura Bronze/Silver/Gold/Parquet
     Lake-->>API: diretórios e arquivos
     API->>Quack: cria schemas/views em conexão local
     API-->>Angular: lista de camadas e tabelas

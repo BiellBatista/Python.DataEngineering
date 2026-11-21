@@ -2,8 +2,8 @@
 
 ## Regras de catálogo
 
-1. São consideradas as camadas `bronze` e `silver` diretamente abaixo do
-   Data Lake.
+1. São consideradas as camadas `bronze`, `silver` e `gold` diretamente abaixo
+   do Data Lake.
 2. Datasets sem Parquet não aparecem no catálogo.
 3. Cada diretório filho que não representa uma partição e contém Parquet vira
    uma tabela, por exemplo `bronze.cotacoes_historicas`.
@@ -12,6 +12,8 @@
 5. Nomes duplicados dentro da mesma camada são rejeitados.
 6. Nomes de datasets são escapados como identificadores SQL.
 7. O catálogo existe em memória em cada conexão; não é persistido pela API.
+8. Diretórios Hive como `ticker=VALE3` podem ser reconhecidos pelo DuckDB como
+   partição e expor `ticker` nas consultas da tabela `gold.candles`.
 
 ## Regras de consulta
 
@@ -33,7 +35,7 @@
 
 | ID | Requisito |
 |---|---|
-| RF-01 | A interface deve listar tabelas Bronze/Silver disponíveis no Data Lake. |
+| RF-01 | A interface deve listar tabelas Bronze/Silver/Gold disponíveis no Data Lake. |
 | RF-02 | Ao selecionar uma tabela, o frontend deve preencher um SQL válido. |
 | RF-03 | A API deve validar uma única instrução SELECT antes da execução. |
 | RF-04 | A API deve executar consultas no DuckDBServer existente por Quack. |

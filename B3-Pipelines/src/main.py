@@ -1,4 +1,4 @@
-"""Ponto de entrada para executar sequencialmente as cargas Bronze e Silver."""
+"""Ponto de entrada para executar sequencialmente as cargas Bronze, Silver e Gold."""
 
 from datetime import datetime, timezone
 
@@ -12,11 +12,14 @@ from config import (
     RUN_ID_TIMESTAMP_FORMAT,
 )
 from historical_series.transformations.bronze import execute_bronze_load
+from historical_series.transformations.gold_candles import (
+    execute_gold_candles_load,
+)
 from historical_series.transformations.silver import execute_silver_load
 
 
 def main() -> None:
-    """Executa as cargas Bronze e Silver com os padrões do ambiente."""
+    """Executa as cargas Bronze, Silver e Gold com os padrões do ambiente."""
     ingestion_time = datetime.now(timezone.utc)
     dag_run_id = (
         f"{MANUAL_RUN_ID_PREFIX}-"
@@ -36,6 +39,10 @@ def main() -> None:
         dag_run_id,
         DEFAULT_START_YEAR,
         DEFAULT_END_YEAR,
+        memory_limit=DUCKDB_MEMORY_LIMIT,
+        threads=DUCKDB_THREADS,
+    )
+    execute_gold_candles_load(
         memory_limit=DUCKDB_MEMORY_LIMIT,
         threads=DUCKDB_THREADS,
     )

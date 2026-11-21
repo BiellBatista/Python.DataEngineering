@@ -126,7 +126,7 @@ Na validação com DuckDB 2.0.0 e Quack, `con.execute(...)` executou SQL pela
 sessão remota, mas `con.sql(...)` e `con.read_csv(...)` não funcionaram depois
 de `CONNECT`: o primeiro falhou por não permitir `materialize()` na sessão
 roteada e o segundo com `Cannot plan statement of type PASSTHROUGH`. Portanto,
-as transformações Bronze e Silver permanecem em SQL enviado pela API DB-API;
+as transformações Bronze, Silver e Gold permanecem em SQL enviado pela API DB-API;
 não migramos a leitura/escrita para a API relacional Python.
 
 ### 4. Execução direta sobre o HD externo
@@ -143,7 +143,7 @@ intermediárias para o filesystem efêmero dos containers.
 **Ganhos:**
 
 - Os arquivos RAW continuam no HD externo.
-- Os Parquets Bronze e Silver continuam sendo gravados no caminho do HD
+- Os Parquets Bronze, Silver e Gold continuam sendo gravados no caminho do HD
   externo.
 - DuckDB lê e grava arquivos nesse caminho diretamente; PostgreSQL não
   armazena as cotações.

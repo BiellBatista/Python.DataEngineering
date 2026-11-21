@@ -37,20 +37,27 @@ classDiagram
         <<Task>>
         run_silver_step(year, run_id)
     }
+    class GoldCandlesLoadTask {
+        <<Task>>
+        run_gold_candles_step(tickers, start_with, end_with)
+    }
     DagDefinition --> ProcessYear : expand por ano
     ProcessYear *-- RawQualityTask
     ProcessYear *-- BronzeLoadTask
     ProcessYear *-- BronzeQualityTask
     ProcessYear *-- SilverLoadTask
+    DagDefinition --> GoldCandlesLoadTask : após todos os grupos anuais
     RawQualityTask --> BronzeLoadTask : ano validado
     BronzeLoadTask --> BronzeQualityTask : Bronze gravada
     BronzeQualityTask --> SilverLoadTask : qualidade aprovada
+    ProcessYear --> GoldCandlesLoadTask : todos os anos concluídos
 ```
 
 **Leitura:** `get_years_to_process` produz a lista de anos inclusiva e
 `process_year.expand` cria a execução mapeada por ano. Dentro de cada grupo, a
 dependência ordena RAW, carga Bronze, qualidade Bronze e carga Silver. Não há
-dependência entre grupos de anos distintos.
+dependência entre grupos de anos distintos. Após todos os grupos, a task Gold
+gera o produto de candles.
 
 ## Módulos, serviços e exceções
 
@@ -84,6 +91,11 @@ classDiagram
         execute_silver_load(...)
         promote_output_directory(staging, output)
     }
+    class gold_candles {
+        <<module>>
+        execute_gold_candles_load(tickers, start_with, end_with)
+        promote_ticker_partition(staging, output)
+    }
     class duckdb_connection {
         <<module>>
         connect_duckdb(...)
@@ -95,6 +107,7 @@ classDiagram
     class RawError
     class BronzeError
     class SilverError
+    class GoldError
     class DataQualityError
     class DuckDBPyConnection {
         <<dependência externa>>
@@ -104,17 +117,20 @@ classDiagram
     PipelineError <|-- RawError
     PipelineError <|-- BronzeError
     PipelineError <|-- SilverError
+    PipelineError <|-- GoldError
     PipelineError <|-- DataQualityError
     raw ..> RawError : sinaliza entrada ausente
     data_quality ..> DataQualityError : rejeita dados inválidos
     bronze ..> BronzeError : sinaliza entrada Bronze ausente
     silver ..> SilverError : sinaliza destino inválido
+    gold_candles ..> GoldError : sinaliza entrada ou saída Gold inválida
     data_quality ..> raw : localiza entrada
     data_quality ..> bronze : seleciona Parquet recente
     bronze ..> raw : lista arquivos de entrada
     bronze ..> duckdb_connection : conecta e executa SQL
     silver ..> bronze : encontra Parquets recentes
     silver ..> duckdb_connection : conecta e executa SQL
+    gold_candles ..> duckdb_connection : conecta e executa SQL
     data_quality ..> duckdb_connection : valida Bronze via SQL
     duckdb_connection ..> DuckDBPyConnection : cria conexão
 ```
@@ -125,5 +141,4 @@ classDiagram
 `common.exceptions` fornece erros especializados para falhas RAW, Bronze,
 Silver e Data Quality.
 
-**Nota sobre `GoldError`:** o projeto contém essa exceção genérica compartilhada,
-mas não existe módulo ou etapa Gold implementada nesta DAG.
+`GoldError` sinaliza falhas específicas da geração Gold de candles.

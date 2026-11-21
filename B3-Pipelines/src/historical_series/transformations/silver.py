@@ -48,6 +48,7 @@ from utils.helpers import check_directories_exist, ensure_directory_available
 
 logger = logging.getLogger(__name__)
 
+# Utilizado r"""...""" para preservar as barras invertidas do RegEx (\d)
 COPY_QUERY = f"""
     /*
     ===========================================================================

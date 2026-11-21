@@ -1,5 +1,8 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,15 +28,77 @@ class DiscoverTablesTests(unittest.TestCase):
             silver_file = data_lake / "silver" / "cotacoes.parquet"
             silver_file.parent.mkdir(parents=True)
             silver_file.touch()
+            gold_file = (
+                data_lake
+                / "gold"
+                / "candles"
+                / "ticker=VALE3"
+                / "part-000.parquet"
+            )
+            gold_file.parent.mkdir(parents=True)
+            gold_file.touch()
 
             with patch.object(main, "DATA_LAKE_ROOT", data_lake):
                 tables = main._discover_tables()
 
         self.assertEqual(
             [(table["layer"], table["name"]) for table in tables],
-            [("bronze", "cotacoes"), ("silver", "data")],
+            [
+                ("bronze", "cotacoes"),
+                ("silver", "data"),
+                ("gold", "candles"),
+            ],
         )
         self.assertEqual(tables[0]["qualified_name"], '"bronze"."cotacoes"')
+        self.assertEqual(tables[2]["qualified_name"], '"gold"."candles"')
+
+    def test_catalog_registers_gold_candles_and_hive_ticker_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            data_lake = Path(temporary_directory)
+            gold_partition = data_lake / "gold" / "candles" / "ticker=VALE3"
+            gold_partition.mkdir(parents=True)
+            gold_file = gold_partition / "part.parquet"
+
+            source = duckdb.connect(":memory:")
+            try:
+                source.execute(
+                    "COPY (SELECT DATE '2024-01-02' AS time, "
+                    "'010' AS tipo_mercado, DECIMAL '10.00' AS open, "
+                    "DECIMAL '12.00' AS high, DECIMAL '9.00' AS low, "
+                    "DECIMAL '11.00' AS close, "
+                    "DECIMAL '100.00' AS volume_total) "
+                    f"TO '{gold_file}' (FORMAT PARQUET)"
+                )
+            finally:
+                source.close()
+
+            with patch.object(main, "DATA_LAKE_ROOT", data_lake):
+                tables = main._discover_tables()
+
+            connection = duckdb.connect(":memory:")
+            try:
+                main._register_tables(connection, tables)
+                row = connection.execute(
+                    'SELECT ticker, time, close FROM "gold"."candles"'
+                ).fetchone()
+
+                @contextmanager
+                def ready_connection():
+                    yield connection, tables
+
+                with patch.object(main, "_ready_connection", ready_connection):
+                    response = main.catalog()
+            finally:
+                connection.close()
+
+        self.assertEqual(row, ("VALE3", date(2024, 1, 2), Decimal("11.00")))
+        gold_layer = next(
+            layer for layer in response["layers"] if layer["name"] == "gold"
+        )
+        self.assertEqual(
+            gold_layer["tables"],
+            [{"name": "candles", "qualified_name": '"gold"."candles"'}],
+        )
 
     def test_quotes_dataset_names_for_sql_identifiers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

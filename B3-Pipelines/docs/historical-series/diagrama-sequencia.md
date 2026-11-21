@@ -74,16 +74,27 @@ sequenceDiagram
             Client-->>Loader: Retorna controle ao worker
             Loader->>Lake: Promove partição anual do staging para Silver
             Lake-->>Loader: Promoção concluída ou erro
-            Loader-->>Worker: Task concluída ou falha
+            Loader-->>Worker: Grupo anual concluído ou falha
         end
     end
+    Worker->>Worker: Aguarda conclusão de todos os grupos anuais
+    Worker->>Loader: Executa carga Gold com tickers/prefixo/sufixo
+    Loader->>Client: Abre conexão e envia COPY parametrizado
+    Client->>Quack: Lê Silver e grava staging por ticker
+    Quack->>Lake: Lê Silver e grava Gold/candles/ticker=...
+    Quack-->>Client: Escrita concluída ou erro
+    Client-->>Loader: Resultado da consulta
+    Loader->>Lake: Promove somente as partições Gold geradas
+    Lake-->>Worker: Task Gold concluída ou falha
 ```
 
 **Leitura:** validação RAW é feita pelo worker sobre o arquivo montado. As
 consultas de carga, qualidade Bronze e transformação Silver são enviadas ao
 servidor Quack, que acessa o mesmo Data Lake. A promoção de diretório Silver é
 feita pelo código Python no volume compartilhado depois que a escrita de
-staging termina.
+staging termina. A geração Gold ocorre uma vez após o término de todos os
+grupos anuais, lê a Silver consolidada e promove as partições dos tickers
+gerados.
 
 Em erros operacionais, o Airflow pode repetir a task uma vez após três
 minutos. Falhas de Data Quality não são repetidas. Para critérios e efeitos

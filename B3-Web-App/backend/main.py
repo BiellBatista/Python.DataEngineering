@@ -32,7 +32,7 @@ DUCKDB_HOST = os.getenv("DUCKDB_HOST", "duckdb-server")
 DUCKDB_PORT = int(os.getenv("DUCKDB_PORT", "9494"))
 QUACK_TOKEN = os.getenv("QUACK_TOKEN", "")
 MAX_QUERY_ROWS = int(os.getenv("MAX_QUERY_ROWS", "1000"))
-LAYERS = ("bronze", "silver")
+LAYERS = ("bronze", "silver", "gold")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _MAX_QUERY_ROWS_LIMIT = 100_000
