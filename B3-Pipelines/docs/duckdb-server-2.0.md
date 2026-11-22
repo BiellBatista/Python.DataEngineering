@@ -161,8 +161,9 @@ remota.
 
 **Depois:** o servidor define `DUCKDB_MEMORY_LIMIT`, `DUCKDB_THREADS` e
 `DUCKDB_PRESERVE_INSERTION_ORDER` uma vez. O cliente rejeita overrides remotos
-divergentes. A carga Bronze distingue entre modo local (divide threads entre
-workers) e modo Quack (threads pertencem à instância global).
+divergentes. As cargas Bronze, Silver e Gold distinguem entre modo local
+(dividem threads entre workers) e modo Quack (threads pertencem à instância
+global).
 
 **Motivo:** evitar configurações contraditórias e interpretações incorretas
 dos limites em conexões remotas concorrentes.
@@ -176,14 +177,16 @@ dos limites em conexões remotas concorrentes.
   local.
 
 **Limite operacional:** a configuração global não reserva um orçamento de
-threads para cada cliente. A concorrência de tarefas, workers Bronze e
-consultas pode competir pelos mesmos recursos. Ajuste concorrência, threads e
-memória juntos, considerando os recursos alocados ao Docker.
+threads para cada cliente. A concorrência de tarefas, workers Bronze/Silver/
+Gold e consultas pode competir pelos mesmos recursos. Ajuste concorrência,
+threads e memória juntos, considerando os recursos alocados ao Docker.
 
-Na execução manual, Bronze pode usar `BRONZE_MAX_WORKERS`; na DAG, o código
-passa `max_workers=1` a cada tarefa anual. O mapeamento de anos ainda pode
-executar tarefas em paralelo, de modo que a concorrência total também depende
-do Airflow.
+Na execução manual, Bronze, Silver e Gold podem usar `BRONZE_MAX_WORKERS`,
+`SILVER_MAX_WORKERS` e `GOLD_MAX_WORKERS`; na DAG, o código passa
+`max_workers=1` a cada tarefa anual e usa os parâmetros `silver_max_workers`
+e `gold_max_workers` para as cargas Silver e Gold. O mapeamento de anos ainda
+pode executar tarefas em paralelo, de modo que a concorrência total também
+depende do Airflow.
 
 ### 6. Compatibilidade de parâmetros no cliente Quack
 

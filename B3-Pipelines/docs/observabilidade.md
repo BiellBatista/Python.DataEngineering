@@ -148,8 +148,9 @@ Em **Explore**, selecione a fonte de dados correspondente:
   `input_dir`; Data Quality Bronze também vincula `memory_limit` e `threads`;
   Bronze vincula `dag_run_id`, intervalo, limites, diretórios e
   `ingestion_time`; Silver vincula `dag_run_id`, intervalo, limites e
-  diretórios; Gold vincula limites, diretórios e o modo de seleção de tickers.
-  O contexto é propagado aos workers paralelos Bronze. Porém, os
+  diretórios; Gold vincula limites, diretórios e o seletor de prefixos de
+  ticker. O contexto é propagado aos workers paralelos Bronze, Silver e Gold.
+  Porém, os
   módulos emitem mensagens por `logging` padrão e a configuração atual não
   mescla o contexto do `structlog` nos registros formatados. Portanto, esses
   campos ainda não são garantidos no texto enviado ao Loki e o filtro
