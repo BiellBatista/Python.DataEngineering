@@ -74,8 +74,8 @@ inteiro.
 ```mermaid
 flowchart TD
     AllSilver["Todos os grupos anuais Silver concluídos"]
-    Select["Selecionar tickers exatos,<br/>prefixo ou sufixo"]
-    Copy["DuckDB lê Silver e filtra candles válidos"]
+    Select["Filtrar tickers pelos prefixos informados<br/>ou usar todos os válidos"]
+    Copy["DuckDB resolve tickers válidos, filtra candles<br/>e agrega os mensais em workers paralelos"]
     Stage["Gravar staging Parquet<br/>PARTITION_BY (ticker)"]
     Promote["Promover cada partição ticker=<TICKER>"]
     Done["Gold concluída"]

@@ -28,6 +28,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(bronze_kwargs["threads"], silver_kwargs["threads"])
         self.assertEqual(bronze_kwargs["memory_limit"], silver_kwargs["memory_limit"])
         gold_load.assert_called_once_with(
+            dag_run_id=bronze_args[0],
             memory_limit=bronze_kwargs["memory_limit"],
             threads=bronze_kwargs["threads"],
         )

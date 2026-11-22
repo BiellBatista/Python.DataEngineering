@@ -39,7 +39,7 @@ classDiagram
     }
     class GoldCandlesLoadTask {
         <<Task>>
-        run_gold_candles_step(tickers, start_with, end_with)
+        run_gold_candles_step(run_id)
     }
     DagDefinition --> ProcessYear : expand por ano
     ProcessYear *-- RawQualityTask
@@ -93,7 +93,7 @@ classDiagram
     }
     class gold_candles {
         <<module>>
-        execute_gold_candles_load(tickers, start_with, end_with)
+        execute_gold_candles_load(start_with, dag_run_id, max_workers)
         promote_ticker_partition(staging, output)
     }
     class duckdb_connection {

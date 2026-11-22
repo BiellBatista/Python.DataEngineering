@@ -19,6 +19,8 @@ from config import (
     DEFAULT_START_YEAR,
     DUCKDB_MEMORY_LIMIT,
     DUCKDB_THREADS,
+    GOLD_MAX_WORKERS,
+    SILVER_MAX_WORKERS,
 )
 from historical_series.data_qualities import (
     DataQualityError,
@@ -30,6 +32,7 @@ from historical_series.transformations.gold_candles import (
     execute_gold_candles_load,
 )
 from historical_series.transformations.silver import execute_silver_load
+from utils.helpers import parse_ticker_list
 
 @dag(
     dag_id="b3_cotahist_medallion_pipeline",
@@ -80,27 +83,32 @@ from historical_series.transformations.silver import execute_silver_load
                 "corresponder a DUCKDB_THREADS no .env."
             ),
         ),
-        "tickers": Param(
-            [],
-            type="array",
-            items={"type": "string"},
-            title="Tickers Gold",
+        "silver_max_workers": Param(
+            SILVER_MAX_WORKERS,
+            type="integer",
+            minimum=1,
+            title="Workers Silver",
             description=(
-                "Lista de tickers exatos para atualizar na Gold. Deixe vazia "
-                "para processar todos ou use start_with/end_with."
+                "Máximo de partições anuais Silver processadas em paralelo."
+            ),
+        ),
+        "gold_max_workers": Param(
+            GOLD_MAX_WORKERS,
+            type="integer",
+            minimum=1,
+            title="Workers Gold",
+            description=(
+                "Máximo de grupos de tickers Gold processados em paralelo."
             ),
         ),
         "start_with": Param(
             "",
             type="string",
             title="Ticker começa com",
-            description="Seleciona tickers Gold que começam com este texto.",
-        ),
-        "end_with": Param(
-            "",
-            type="string",
-            title="Ticker termina com",
-            description="Seleciona tickers Gold que terminam com este texto.",
+            description=(
+                "Prefixos de tickers Gold separados por vírgula "
+                "(ex.: 'VALE, PETR, BBAS'). Deixe vazio para processar todos."
+            ),
         ),
     },
     tags=["b3", "market_data", "duckdb", "medallion", "cotahist"],
@@ -193,6 +201,7 @@ def b3_cotahist_pipeline():
                 end_year=year,
                 memory_limit=str(params["memory_limit"]),
                 threads=int(params["threads"]),
+                max_workers=int(params["silver_max_workers"]),
             )
             print(f"[{year}] Carga Silver concluída.")
 
@@ -202,16 +211,16 @@ def b3_cotahist_pipeline():
         run_silver_step(quality_year)
 
     @task(task_id="load_gold_candles")
-    def run_gold_candles_step(**context: Any) -> None:
+    def run_gold_candles_step(run_id: str, **context: Any) -> None:
         """Gera as partições Gold após todas as partições Silver do lote."""
         params = context["params"]
         print("Iniciando geração dos candles Gold.")
         execute_gold_candles_load(
-            tickers=params["tickers"] or None,
-            start_with=params["start_with"] or None,
-            end_with=params["end_with"] or None,
+            start_with=parse_ticker_list(params["start_with"]),
+            dag_run_id=run_id,
             memory_limit=str(params["memory_limit"]),
             threads=int(params["threads"]),
+            max_workers=int(params["gold_max_workers"]),
         )
         print("Geração dos candles Gold concluída.")
 

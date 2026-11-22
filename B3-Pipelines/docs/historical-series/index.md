@@ -25,18 +25,23 @@ inclusivo e deve estar entre 1986 e 2030.
   metadados de execução e particionando por ano e instante de ingestão.
 - Executa Data Quality sobre a ingestão Bronze mais recente do ano.
 - Converte apenas registros de negociação para Silver tipada, deduplica por
-  ativo, data de pregão e tipo de mercado e mantém linhagem.
-- Substitui somente a partição Silver anual solicitada; se a escrita ou
-  promoção falhar, tenta preservar ou restaurar a versão anterior.
-- Gera candles OHLC na Gold, particionados por ticker, filtrando registros
-  inconsistentes e atualizando apenas os tickers selecionados.
+  ativo, data de pregão e tipo de mercado, materializa a chave em `entity_id`
+  e mantém linhagem.
+- Processa os anos Silver em workers paralelos e substitui somente a partição
+  Silver anual solicitada; se a escrita ou promoção falhar, tenta preservar ou
+  restaurar a versão anterior.
+- Gera candles OHLC diários (`timeframe = '1d'`) e mensais (`timeframe = '1m'`)
+  na Gold, particionados por ticker, filtrando registros inconsistentes,
+  filtrando por prefixos de ticker e distribuindo grupos de tickers entre
+  workers paralelos.
 
 ## O que não faz
 
 - Não baixa arquivos nem consulta uma API da B3. Os TXT devem estar disponíveis
   antes da execução.
 - Não cria dashboard, API de consulta ou catálogo de dados. A Gold contém
-  candles OHLC, não indicadores ou preços oficiais de fechamento.
+  candles OHLC diários e mensais, não indicadores ou preços oficiais de
+  fechamento.
 - Não representa o preço oficial de fechamento do pregão: a coluna chamada
   `preco_fechamento` é extraída de `PREULT`, o preço do último negócio no
   layout COTAHIST.
@@ -72,8 +77,21 @@ volume compartilhado.
 
 Bronze preserva uma coluna `content` com a linha COTAHIST e campos de
 auditoria (`_ingested_at`, `_source_file`, `_dag_run_id`, `year` e
-`_ingested_date`). Silver expõe os campos tipados de cotação e a linhagem da
-execução, do arquivo RAW e do Parquet Bronze.
+`_ingested_date`). Silver expõe os campos tipados de cotação, a coluna
+`entity_id` (`TICKER|YYYY-MM-DD|MERCADO`) e a linhagem da execução, do
+arquivo RAW e do Parquet Bronze. Gold expõe candles com `timeframe` (`1d` ou
+`1m`), colunas OHLC, `volume_total` e metadados `_ingested_at` (horário da
+carga, em UTC) e `_dag_run_id`; cada partição `ticker=<TICKER>/` contém o
+histórico completo do ativo nos dois timeframes.
+
+## DAG auxiliar — somente camada Gold
+
+A DAG `b3_gold_candles` (`airflow/dags/dag_gold_candles.py`) executa apenas a
+transformação `gold/candles` sobre o dataset Silver já consolidado, sem
+repetir Bronze e Silver. É útil para reprocessar tickers ou corrigir a Gold
+sem rerodar o pipeline completo. Aceita o mesmo seletor de ticker da DAG
+principal — `start_with`, uma lista de prefixos separada por vírgula (vazio
+processa todos) — além de `memory_limit`, `threads` e `max_workers`.
 
 ## Fluxo funcional
 
@@ -95,7 +113,7 @@ flowchart TD
     BronzeDQ["Validar a ingestão Bronze<br/>mais recente do ano"]
     Silver["Transformar e deduplicar<br/>registros de negociação"]
     Promote["Promover somente a partição<br/>Silver daquele ano"]
-    Gold["Gerar candles OHLC<br/>após todos os anos Silver"]
+    Gold["Gerar candles OHLC diários e mensais<br/>após todos os anos Silver"]
     Success["Ano concluído"]
     Failure["Falha no ano<br/>etapas seguintes bloqueadas"]
     Lake[("Data Lake<br/>RAW / Bronze / Silver / Gold")]

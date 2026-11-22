@@ -32,8 +32,9 @@ mantidos em arquivos no diretório do host montado nos containers em
 - Não é um produto analítico pronto, dashboard, API de negócio ou catálogo de
   dados.
 - Não define uma camada Gold universal nem métricas de negócio para todas as
-  pipelines; a série histórica COTAHIST produz candles OHLC particionados por
-  ticker, e outras pipelines podem definir seus próprios produtos.
+  pipelines; a série histórica COTAHIST produz candles OHLC diários e mensais
+  particionados por ticker, e outras pipelines podem definir seus próprios
+  produtos.
 - Não é um cluster distribuído ou de alta disponibilidade: o Compose usa
   `LocalExecutor` e uma única instância DuckDB/Quack.
 - Não define uma agenda universal para os dados; agendamento, execução manual

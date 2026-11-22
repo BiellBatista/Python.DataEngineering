@@ -43,6 +43,7 @@ def main() -> None:
         threads=DUCKDB_THREADS,
     )
     execute_gold_candles_load(
+        dag_run_id=dag_run_id,
         memory_limit=DUCKDB_MEMORY_LIMIT,
         threads=DUCKDB_THREADS,
     )

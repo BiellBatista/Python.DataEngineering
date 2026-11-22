@@ -226,6 +226,8 @@ documento ou no `.env.example`.
 | `DUCKDB_MEMORY_LIMIT` | Servidor DuckDB e parâmetros padrão da DAG | Limite global da instância, por exemplo `8GB`; unidades aceitas: B, KB, MB, GB ou TB. |
 | `DUCKDB_THREADS` | Servidor DuckDB e parâmetros padrão da DAG | Número positivo de threads globais da instância; exemplo `4`. Não é uma reserva por task. |
 | `BRONZE_MAX_WORKERS` | Configuração do Airflow e execução local/manual de Bronze | Número positivo; na DAG também limita as tasks ativas, exemplo `4`. Concorrência maior compartilha os mesmos recursos globais do DuckDB. |
+| `SILVER_MAX_WORKERS` | Parâmetro `silver_max_workers` da DAG e execução local/manual de Silver | Número positivo de partições anuais Silver processadas em paralelo; exemplo `4`. |
+| `GOLD_MAX_WORKERS` | Parâmetro `gold_max_workers`/`max_workers` das DAGs e execução local/manual de Gold | Número positivo de grupos de tickers Gold processados em paralelo; exemplo `4`. |
 | `B3_START_YEAR` | `src/config.py` e parâmetros padrão da DAG | Primeiro ano padrão, inclusive; exemplo `2024`. Pode ser substituído na execução manual. |
 | `B3_END_YEAR` | `src/config.py` e parâmetros padrão da DAG | Último ano padrão, inclusive; exemplo `2025`. Deve ser maior ou igual ao ano inicial. |
 

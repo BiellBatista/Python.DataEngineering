@@ -86,7 +86,7 @@ class SilverTransformationTests(unittest.TestCase):
             silver_connection = duckdb.connect(":memory:")
             try:
                 result = silver_connection.execute(
-                    "SELECT preco_fechamento, volume_total, "
+                    "SELECT preco_fechamento, volume_total, entity_id, "
                     "CAST(_ingested_at AS VARCHAR), "
                     "CAST(_bronze_ingested_at AS VARCHAR), _raw_source_file, "
                     "_bronze_source_file, _dag_run_id "
@@ -103,11 +103,13 @@ class SilverTransformationTests(unittest.TestCase):
 
             self.assertEqual(result[0], Decimal("56.78"))
             self.assertEqual(result[1], Decimal("1234.56"))
-            self.assertGreater(result[2], result[3])
-            self.assertEqual(result[4], "COTAHIST_Z.TXT")
-            self.assertEqual(result[5], str(bronze_file))
-            self.assertEqual(result[6], "silver-run")
+            self.assertEqual(result[2], "TEST3|2024-01-02|010")
+            self.assertGreater(result[3], result[4])
+            self.assertEqual(result[5], "COTAHIST_Z.TXT")
+            self.assertEqual(result[6], str(bronze_file))
+            self.assertEqual(result[7], "silver-run")
             self.assertNotIn("_source_file", types)
+            self.assertEqual(types["entity_id"], "VARCHAR")
             for column in (
                 "preco_abertura",
                 "preco_maximo",
@@ -122,6 +124,7 @@ class SilverTransformationTests(unittest.TestCase):
         cases = (
             ({"start_year": 2025, "end_year": 2024}, "start_year"),
             ({"start_year": 2024, "end_year": 2024, "threads": 0}, "threads"),
+            ({"start_year": 2024, "end_year": 2024, "max_workers": 0}, "max_workers"),
             (
                 {"start_year": 2024, "end_year": 2024, "memory_limit": "invalid"},
                 "memory_limit",
@@ -259,6 +262,184 @@ class SilverTransformationTests(unittest.TestCase):
                         output_dir=str(output),
                     )
 
+            connection.close.assert_called_once()
+            self.assertEqual(list(output.iterdir()), [])
+
+    def test_load_splits_local_threads_across_year_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "silver"
+
+            def write_staged_partition(_bronze_dir, _parquets, _run, out, _mem, _thr, _ts):
+                (Path(out) / Path(_bronze_dir).name).mkdir()
+
+            with (
+                patch.object(
+                    silver, "list_bronze_dirs", return_value=["year=2023", "year=2024"]
+                ),
+                patch.object(silver, "check_directories_exist", return_value=[]),
+                patch.object(
+                    silver,
+                    "find_most_recent_bronze_parquets",
+                    return_value=["input.parquet"],
+                ),
+                patch.object(silver, "_load_year_partition", side_effect=write_staged_partition) as load,
+            ):
+                execute_silver_load(
+                    "run",
+                    2023,
+                    2024,
+                    threads=4,
+                    max_workers=2,
+                    memory_limit=None,
+                    input_dir=str(root),
+                    output_dir=str(output),
+                )
+
+            self.assertEqual(load.call_count, 2)
+            self.assertEqual(
+                [call.args[5] for call in load.call_args_list],
+                [2, 2],
+            )
+            self.assertTrue((output / "year=2023").is_dir())
+            self.assertTrue((output / "year=2024").is_dir())
+
+    def test_load_uses_remote_thread_settings_for_year_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "silver"
+
+            def write_staged_partition(_bronze_dir, _parquets, _run, out, _mem, _thr, _ts):
+                (Path(out) / Path(_bronze_dir).name).mkdir()
+
+            with (
+                patch.object(
+                    silver, "list_bronze_dirs", return_value=["year=2023", "year=2024"]
+                ),
+                patch.object(silver, "check_directories_exist", return_value=[]),
+                patch.object(
+                    silver,
+                    "find_most_recent_bronze_parquets",
+                    return_value=["input.parquet"],
+                ),
+                patch.object(silver, "DUCKDB_HOST", "duckdb-server"),
+                patch.object(silver, "_load_year_partition", side_effect=write_staged_partition) as load,
+            ):
+                execute_silver_load(
+                    "run",
+                    2023,
+                    2024,
+                    threads=4,
+                    max_workers=None,
+                    memory_limit=None,
+                    input_dir=str(root),
+                    output_dir=str(output),
+                )
+
+            self.assertEqual(load.call_count, 2)
+            self.assertEqual(
+                [call.args[5] for call in load.call_args_list],
+                [4, 4],
+            )
+
+    def test_load_propagates_year_worker_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with (
+                patch.object(silver, "list_bronze_dirs", return_value=["year=2024"]),
+                patch.object(silver, "check_directories_exist", return_value=[]),
+                patch.object(
+                    silver,
+                    "find_most_recent_bronze_parquets",
+                    return_value=["input.parquet"],
+                ),
+                patch.object(
+                    silver,
+                    "_load_year_partition",
+                    side_effect=RuntimeError("worker failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "worker failed"):
+                    execute_silver_load(
+                        "run",
+                        2024,
+                        2024,
+                        threads=1,
+                        input_dir=str(root),
+                        output_dir=str(root / "silver"),
+                    )
+
+    def test_year_partition_worker_promotes_and_closes_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "silver"
+            output.mkdir()
+            connection = Mock()
+
+            def write_staged_partition(_con, _query, parameters):
+                (Path(parameters["output_dir"]) / "year=2024").mkdir()
+
+            with (
+                patch.object(silver, "connect_duckdb", return_value=connection),
+                patch.object(silver, "execute_query", side_effect=write_staged_partition),
+            ):
+                silver._load_year_partition(
+                    "bronze/year=2024",
+                    ["input.parquet"],
+                    "run",
+                    output,
+                    None,
+                    2,
+                    datetime(2024, 1, 1, tzinfo=timezone.utc),
+                )
+
+            self.assertTrue((output / "year=2024").is_dir())
+            connection.close.assert_called_once()
+            self.assertEqual(list(output.iterdir()), [output / "year=2024"])
+
+    def test_year_partition_worker_closes_connection_on_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "silver"
+            output.mkdir()
+
+            connection = Mock()
+            with (
+                patch.object(silver, "connect_duckdb", return_value=connection),
+                patch.object(
+                    silver,
+                    "execute_query",
+                    side_effect=RuntimeError("copy failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "copy failed"):
+                    silver._load_year_partition(
+                        "bronze/year=2024",
+                        ["input.parquet"],
+                        "run",
+                        output,
+                        None,
+                        2,
+                        datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    )
+            connection.close.assert_called_once()
+            self.assertEqual(list(output.iterdir()), [])
+
+            connection.reset_mock()
+            with (
+                patch.object(silver, "connect_duckdb", return_value=connection),
+                patch.object(silver, "execute_query"),
+            ):
+                with self.assertRaisesRegex(SilverError, "não gerou a partição"):
+                    silver._load_year_partition(
+                        "bronze/year=2024",
+                        ["input.parquet"],
+                        "run",
+                        output,
+                        None,
+                        2,
+                        datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    )
             connection.close.assert_called_once()
             self.assertEqual(list(output.iterdir()), [])
 

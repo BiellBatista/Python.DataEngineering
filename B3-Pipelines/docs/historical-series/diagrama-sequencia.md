@@ -78,7 +78,7 @@ sequenceDiagram
         end
     end
     Worker->>Worker: Aguarda conclusão de todos os grupos anuais
-    Worker->>Loader: Executa carga Gold com tickers/prefixo/sufixo
+    Worker->>Loader: Executa carga Gold com run_id e prefixos de ticker
     Loader->>Client: Abre conexão e envia COPY parametrizado
     Client->>Quack: Lê Silver e grava staging por ticker
     Quack->>Lake: Lê Silver e grava Gold/candles/ticker=...

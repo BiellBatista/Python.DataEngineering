@@ -6,6 +6,8 @@ import re
 import shutil
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -31,6 +33,7 @@ from config import (
     B3_TRADE_DATE_LENGTH,
     B3_TRADE_DATE_START,
     BRONZE_COTAHIST_DIR,
+    DUCKDB_HOST,
     DUCKDB_MEMORY_LIMIT,
     DUCKDB_MEMORY_LIMIT_PATTERN,
     DUCKDB_THREADS,
@@ -38,6 +41,7 @@ from config import (
     PARQUET_PER_THREAD_OUTPUT,
     PARQUET_ROW_GROUP_SIZE,
     SILVER_COTAHIST_DIR,
+    SILVER_MAX_WORKERS,
 )
 from historical_series.transformations.bronze import (
     find_most_recent_bronze_parquets,
@@ -79,6 +83,8 @@ COPY_QUERY = f"""
          `ticker`, `data_pregao` e `tipo_mercado`, ordenada por ingestão Bronze,
          arquivo TXT de origem e caminho Parquet para desempate determinístico.
        - `_ingested_at` registra o horário da carga na camada Silver.
+       - `entity_id` materializa a chave de deduplicação no formato
+         `TICKER|YYYY-MM-DD|MERCADO` (ex.: `VIIAD540|2022-02-11|070`).
        - Garante que reprocessamentos (idempotência) mantenham sempre 
          apenas a versão mais recente do registro.
 
@@ -139,6 +145,8 @@ COPY_QUERY = f"""
             preco_minimo,
             preco_fechamento,
             volume_total,
+            ticker || '|' || strftime(data_pregao, '%Y-%m-%d') || '|'
+                || tipo_mercado AS entity_id,
             $ingestion_time AS _ingested_at,
             _bronze_ingested_at,
             _raw_source_file,
@@ -170,16 +178,18 @@ def execute_silver_load(
     end_year: int,
     memory_limit: Optional[str] = DUCKDB_MEMORY_LIMIT,
     threads: Optional[int] = DUCKDB_THREADS,
+    max_workers: Optional[int] = SILVER_MAX_WORKERS,
     input_dir: str = BRONZE_COTAHIST_DIR,
     output_dir: str = SILVER_COTAHIST_DIR,
 ) -> None:
-    """Consolida os Parquets Bronze e substitui as partições anuais processadas.
+    """Consolida os Parquets Bronze em paralelo e promove as partições anuais.
 
-    Processa cada ano isoladamente: lê a ingestão Bronze mais recente, aplica
-    transformação e deduplicação, grava em staging e promove somente a
-    partição ``year=AAAA`` daquele ano. Outras partições Silver são preservadas.
-    Se um ano falhar, os anos já promovidos permanecem atualizados e os demais
-    ainda não processados não são alterados.
+    Processa cada ano de forma independente e potencialmente concorrente:
+    lê a ingestão Bronze mais recente, aplica transformação e deduplicação,
+    grava em staging e promove somente a partição ``year=AAAA`` daquele ano.
+    Outras partições Silver são preservadas. Se um ano falhar, os anos já
+    promovidos permanecem atualizados e os demais ainda não processados não
+    são alterados.
 
     Args:
         dag_run_id: Identificador da execução do pipeline, armazenado nos dados.
@@ -187,13 +197,17 @@ def execute_silver_load(
         end_year: Último ano a processar, inclusive.
         memory_limit: Limite de memória DuckDB. No modo Quack, deve
             corresponder ao limite global do servidor; ``None`` usa o padrão.
-        threads: Número de threads DuckDB. No modo Quack, deve corresponder ao
-            limite global do servidor; localmente, ``None`` usa as CPUs disponíveis.
+        threads: Número de threads DuckDB. No modo Quack, é global para a
+            instância; localmente é dividido entre os workers Silver.
+            ``None`` usa as CPUs disponíveis.
+        max_workers: Número máximo de partições anuais processadas em
+            paralelo. ``None`` usa o padrão configurado.
         input_dir: Diretório raiz de entrada da camada Bronze.
         output_dir: Diretório raiz de saída da camada Silver.
 
     Raises:
-        ValueError: Se os anos, threads ou limite de memória forem inválidos.
+        ValueError: Se os anos, threads, workers ou limite de memória forem
+            inválidos.
         BronzeError: Se não houver diretórios ou arquivos Parquet Bronze.
         SilverError: Se o caminho de saída existir e não for diretório.
         Exception: Propaga falhas de leitura ou transformação. A partição Silver
@@ -203,6 +217,8 @@ def execute_silver_load(
         raise ValueError("start_year deve ser menor ou igual a end_year.")
     if threads is not None and threads <= 0:
         raise ValueError("threads deve ser maior que zero.")
+    if max_workers is not None and max_workers <= 0:
+        raise ValueError("max_workers deve ser maior que zero.")
 
     _validate_memory_limit(memory_limit)
 
@@ -219,13 +235,13 @@ def execute_silver_load(
 
         bronze_dirs = list_bronze_dirs(start_year, end_year, input_dir)
         missing_dirs = check_directories_exist(bronze_dirs)
-        
+
         if missing_dirs:
             raise BronzeError(
                 f"Diretórios Bronze inexistentes: {', '.join(missing_dirs)}"
             )
 
-        total_threads = threads if threads is not None else (os.cpu_count() or 4)
+        year_inputs = []
         for bronze_dir in bronze_dirs:
             recent_parquets = find_most_recent_bronze_parquets(bronze_dir)
 
@@ -239,59 +255,138 @@ def execute_silver_load(
                 len(recent_parquets),
                 bronze_dir,
             )
-            staging_dir = tempfile.mkdtemp(
-                prefix=f".{output_path.name}.staging-",
-                dir=output_path,
-            )
-            try:
-                con = connect_duckdb(
-                    memory_limit=memory_limit,
-                    threads=total_threads,
-                )
-                try:
-                    logger.info(
-                        "Threads DuckDB configuradas: %s; ano=%s",
-                        total_threads,
-                        Path(bronze_dir).name,
-                    )
-                    execute_query(
-                        con,
-                        COPY_QUERY,
-                        {
-                            "input_files": recent_parquets,
-                            "output_dir": staging_dir,
-                            "dag_run_id": dag_run_id,
-                            "ingestion_time": datetime.now(timezone.utc),
-                        },
-                    )
-                finally:
-                    con.close()
+            year_inputs.append((bronze_dir, recent_parquets))
 
-                year_partition = Path(bronze_dir).name
-                staged_partition = Path(staging_dir) / year_partition
-                if not staged_partition.is_dir():
-                    raise SilverError(
-                        "A transformação Silver não gerou a partição esperada: "
-                        f"{staged_partition}"
-                    )
+        total_threads = threads if threads is not None else (os.cpu_count() or 4)
+        worker_limit = (
+            max_workers if max_workers is not None else SILVER_MAX_WORKERS
+        )
+        workers = min(worker_limit, len(year_inputs))
+        if DUCKDB_HOST:
+            threads_per_worker = total_threads
+        else:
+            workers = min(workers, total_threads)
+            threads_per_worker = max(1, total_threads // workers)
 
-                _promote_output_directory(
-                    staged_partition,
-                    output_path / year_partition,
-                )
+        logger.info("Partições Silver a processar: %s", len(year_inputs))
+        logger.info("Workers paralelos: %s", workers)
+        if DUCKDB_HOST:
+            logger.info("Threads DuckDB globais no servidor: %s", total_threads)
+        else:
+            logger.info("Threads DuckDB por worker: %s", threads_per_worker)
+        logger.info(
+            "Threads totais máximas: %s", workers * threads_per_worker
+        )
+
+        ingestion_time = datetime.now(timezone.utc)
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="silver-worker",
+        ) as executor:
+            futures = {
+                executor.submit(
+                    copy_context().run,
+                    _load_year_partition,
+                    bronze_dir,
+                    recent_parquets,
+                    dag_run_id,
+                    output_path,
+                    memory_limit,
+                    threads_per_worker,
+                    ingestion_time,
+                ): bronze_dir
+                for bronze_dir, recent_parquets in year_inputs
+            }
+            completed = 0
+
+            for future in as_completed(futures):
+                future.result()
+                completed += 1
                 logger.info(
-                    "Partição Silver %s atualizada com sucesso.",
-                    year_partition,
+                    "Progresso: %s/%s partições Silver concluídas",
+                    completed,
+                    len(year_inputs),
                 )
-            finally:
-                if os.path.exists(staging_dir):
-                    shutil.rmtree(staging_dir)
 
         logger.info("✅ Carga da Camada Silver concluída com sucesso!")
 
     except Exception:
         logger.exception("❌ Erro durante a carga da Camada Silver.")
         raise
+
+
+def _load_year_partition(
+    bronze_dir: str,
+    recent_parquets: list[str],
+    dag_run_id: str,
+    output_path: Path,
+    memory_limit: Optional[str],
+    duckdb_threads: int,
+    ingestion_time: datetime,
+) -> None:
+    """Transforma e promove uma partição anual Silver com conexão exclusiva.
+
+    Args:
+        bronze_dir: Diretório Bronze ``year=AAAA`` de entrada.
+        recent_parquets: Parquets da ingestão mais recente do ano.
+        dag_run_id: Identificador da execução do pipeline.
+        output_path: Diretório raiz da camada Silver.
+        memory_limit: Limite da instância DuckDB, ou ``None`` para o padrão.
+        duckdb_threads: Número de threads global no modo Quack ou permitido
+            nesta conexão no modo local.
+        ingestion_time: Timestamp UTC registrado em ``_ingested_at``.
+
+    Raises:
+        Exception: Propaga erros de conexão, transformação ou promoção.
+    """
+    year_partition = Path(bronze_dir).name
+    staging_dir = tempfile.mkdtemp(
+        prefix=f".{output_path.name}.staging-",
+        dir=output_path,
+    )
+    con = None
+
+    try:
+        logger.info(
+            "Threads DuckDB configuradas: %s; ano=%s",
+            duckdb_threads,
+            year_partition,
+        )
+        con = connect_duckdb(
+            memory_limit=memory_limit,
+            threads=duckdb_threads,
+        )
+        execute_query(
+            con,
+            COPY_QUERY,
+            {
+                "input_files": recent_parquets,
+                "output_dir": staging_dir,
+                "dag_run_id": dag_run_id,
+                "ingestion_time": ingestion_time,
+            },
+        )
+
+        staged_partition = Path(staging_dir) / year_partition
+        if not staged_partition.is_dir():
+            raise SilverError(
+                "A transformação Silver não gerou a partição esperada: "
+                f"{staged_partition}"
+            )
+
+        _promote_output_directory(
+            staged_partition,
+            output_path / year_partition,
+        )
+        logger.info(
+            "Partição Silver %s atualizada com sucesso.",
+            year_partition,
+        )
+    finally:
+        if con is not None:
+            con.close()
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
 
 
 def _promote_output_directory(staging_dir: Path, output_dir: Path) -> None:

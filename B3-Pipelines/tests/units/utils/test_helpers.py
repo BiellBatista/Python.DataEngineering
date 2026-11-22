@@ -5,10 +5,27 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from utils.helpers import check_directories_exist, ensure_directory_available
+from utils.helpers import (
+    check_directories_exist,
+    ensure_directory_available,
+    parse_ticker_list,
+)
 
 
 class DirectoryHelperTests(unittest.TestCase):
+    def test_parse_ticker_list_handles_empty_and_comma_separated_values(self) -> None:
+        self.assertIsNone(parse_ticker_list(None))
+        self.assertIsNone(parse_ticker_list(""))
+        self.assertIsNone(parse_ticker_list(" , , "))
+        self.assertEqual(
+            parse_ticker_list("VALE3"),
+            ["VALE3"],
+        )
+        self.assertEqual(
+            parse_ticker_list(" VALE3, PETR4 ,,BBAS3 "),
+            ["VALE3", "PETR4", "BBAS3"],
+        )
+
     def test_check_directories_accepts_single_and_multiple_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             existing = Path(temporary_directory) / "existing"

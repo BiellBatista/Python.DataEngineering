@@ -1,7 +1,24 @@
 """Utilitários para validar diretórios e pontos de montagem."""
 
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
+
+
+def parse_ticker_list(value: Optional[str]) -> Optional[list[str]]:
+    """Converte uma lista de códigos separada por vírgulas em lista Python.
+
+    Args:
+        value: Texto como ``"VALE3, PETR4"``; ``None`` ou vazio quando o
+            seletor não foi informado.
+
+    Returns:
+        Códigos sem espaços externos e sem vazios; ``None`` quando nenhum
+        código foi informado.
+    """
+    if value is None:
+        return None
+    codes = [item.strip() for item in value.split(",")]
+    return [code for code in codes if code] or None
 
 
 def check_directories_exist(directories: Union[str, list[str]]) -> list[str]:

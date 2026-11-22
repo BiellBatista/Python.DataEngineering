@@ -54,6 +54,8 @@ DUCKDB_THREADS = _positive_int_from_env(
     os.cpu_count() or 4,
 )
 BRONZE_MAX_WORKERS = _positive_int_from_env("BRONZE_MAX_WORKERS", 4)
+SILVER_MAX_WORKERS = _positive_int_from_env("SILVER_MAX_WORKERS", 4)
+GOLD_MAX_WORKERS = _positive_int_from_env("GOLD_MAX_WORKERS", 4)
 DUCKDB_HOST = os.getenv("DUCKDB_HOST")
 DUCKDB_PORT = _positive_int_from_env("DUCKDB_PORT", 9494)
 QUACK_TOKEN = os.getenv("QUACK_TOKEN")
