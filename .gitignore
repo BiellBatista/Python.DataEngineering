@@ -218,6 +218,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Angular
+.angular/
+
 # Apache Airflow
 # Airflow logs
 */airflow/logs/

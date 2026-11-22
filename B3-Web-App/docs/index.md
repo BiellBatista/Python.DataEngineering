@@ -1,14 +1,15 @@
 # B3 App Web — documentação
 
-Esta documentação descreve o Data Explorer implementado em `B3-Web-App`.
+Esta documentação descreve o Data Process implementado em `B3-Web-App`.
 Ela separa os contratos da API, o comportamento da interface, a integração com
 o B3-Pipelines e a observabilidade.
 
 ## Objetivo
 
-Permitir a exploração somente leitura dos dados Bronze, Silver e Gold já
-persistidos no Data Lake, sem duplicar o pipeline de transformação nem publicar
-o servidor DuckDB no host.
+Oferecer a visualização de candles diários Gold e permitir a exploração
+somente leitura dos dados Bronze, Silver e Gold já persistidos no Data Lake,
+sem duplicar o pipeline de transformação nem publicar o servidor DuckDB no
+host.
 
 ## Sumário
 
@@ -29,11 +30,11 @@ o servidor DuckDB no host.
 flowchart LR
     User["Pessoa usuária<br/>Analista ou engenheira de dados"]
     subgraph Web["B3 App Web"]
-        App["Data Explorer"]
+        App["Data Process<br/>candles Gold e Data Explorer SQL"]
     end
     Lake["B3-Pipelines<br/>Data Lake, DuckDBServer e observabilidade"]
 
-    User -->|"Consulta dados Bronze/Silver/Gold"| App
+    User -->|"Candles Gold e consultas SELECT via Quack"| App
     App -->|"Catálogo e consultas SELECT via Quack"| Lake
 ```
 

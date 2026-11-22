@@ -5,12 +5,12 @@
 ```mermaid
 flowchart LR
     subgraph Browser["Navegador"]
-        UI["Catálogo e editor SQL"]
+        UI["Aba Candles (Lightweight Charts)<br/>e Data Explorer (catálogo + editor SQL)"]
         Telemetry["Serviço de telemetria frontend"]
     end
     subgraph Web["Container web"]
         Static["Arquivos estáticos Angular"]
-        Routes["FastAPI: health, catalog, query, logs"]
+        Routes["FastAPI: health, catalog, query, logs,<br/>candles/tickers e candles/{ticker}"]
         Catalog["Descoberta e registro de views"]
         Validation["Validação somente SELECT"]
         Adapter["Cliente DuckDB local"]

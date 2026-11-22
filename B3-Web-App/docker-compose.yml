@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     environment:
       B3_DATA_LAKE_ROOT: /data-lake
+      B3_GOLD_CANDLES_DIR: ${B3_GOLD_CANDLES_DIR:-/data-lake/gold/candles}
       DUCKDB_HOST: ${DUCKDB_HOST:-duckdb-server}
       DUCKDB_PORT: ${DUCKDB_PORT:-9494}
       QUACK_TOKEN: ${QUACK_TOKEN:?Configure QUACK_TOKEN em .env}

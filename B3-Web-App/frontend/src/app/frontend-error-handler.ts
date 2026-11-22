@@ -7,7 +7,7 @@ export class FrontendErrorHandler implements ErrorHandler {
   private readonly telemetry = inject(FrontendTelemetryService);
 
   handleError(_error: unknown): void {
-    console.error('Erro não tratado na interface do Data Explorer.');
+    console.error('Erro não tratado na interface do Data Process.');
     this.telemetry.emit('erro_na_interface');
   }
 }

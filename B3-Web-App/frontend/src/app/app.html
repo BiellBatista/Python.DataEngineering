@@ -2,8 +2,20 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">B3</span>
-      <span class="brand-name">Data Explorer</span>
+      <span class="brand-name">Data Process</span>
     </div>
+    <nav class="page-nav" aria-label="Navegação principal">
+      <button
+        type="button"
+        [class.nav-active]="activeView === 'candles'"
+        (click)="setActiveView('candles')"
+      >Candles</button>
+      <button
+        type="button"
+        [class.nav-active]="activeView === 'explorer'"
+        (click)="setActiveView('explorer')"
+      >Data Explorer</button>
+    </nav>
     <div class="connection-state">
       <span class="state-dot"></span>
       DuckDBServer
@@ -11,6 +23,7 @@
   </header>
 
   <main class="explorer">
+    @if (activeView === 'explorer') {
     <aside class="catalog-panel">
       <div class="panel-heading">
         <div>
@@ -65,8 +78,9 @@
         Parquet · Bronze / Silver / Gold
       </div>
     </aside>
+    }
 
-    <section class="workspace">
+    <section class="workspace" [hidden]="activeView !== 'explorer'">
       <div class="query-panel">
         <div class="query-heading">
           <div>
@@ -176,6 +190,120 @@
             }
           </div>
         }
+      </div>
+    </section>
+
+    <section class="candles-workspace" [hidden]="activeView !== 'candles'">
+      <div class="candles-toolbar">
+        <div>
+          <div class="eyebrow">MERCADO À VISTA · B3</div>
+          <h1>Gráfico de candles</h1>
+        </div>
+        <div class="candles-controls">
+          <div class="ticker-controls">
+            <label class="ticker-search">
+              <span>Buscar ticker</span>
+              <input
+                type="search"
+                aria-label="Buscar ticker"
+                placeholder="Ex.: VALE"
+                [(ngModel)]="tickerSearch"
+              >
+            </label>
+            <label class="ticker-select">
+              <span>Ticker</span>
+              <select
+                aria-label="Selecionar ticker"
+                [ngModel]="selectedTicker"
+                [disabled]="isLoadingTickers || availableTickers.length === 0"
+                (ngModelChange)="onTickerChange($event)"
+              >
+                @for (ticker of filteredTickers; track ticker) {
+                  <option [value]="ticker">{{ ticker }}</option>
+                }
+              </select>
+            </label>
+          </div>
+          <div class="timeframe-controls">
+            <span class="timeframe-label">Timeframe</span>
+            <div class="timeframe-group" role="group" aria-label="Timeframe">
+              @for (timeframe of timeframes; track timeframe.id) {
+                <button
+                  type="button"
+                  class="timeframe-option"
+                  [class.timeframe-active]="selectedTimeframe === timeframe.id"
+                  [disabled]="!timeframe.available"
+                  [title]="timeframe.available ? timeframe.id : timeframe.id + ' · em breve'"
+                  (click)="setTimeframe(timeframe)"
+                >{{ timeframe.id }}</button>
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="candle-chart-card">
+        <div class="candle-chart-heading">
+          <div class="candle-symbol">
+            <strong>{{ selectedTicker || 'Carregando...' }}</strong>
+            <span>· {{ selectedTimeframe }}</span>
+            <span class="nominal-badge" title="Preços nominais COTAHIST, sem ajuste de proventos. O fechamento representa PREULT (último negócio), não o fechamento oficial.">
+              Preços nominais · sem ajuste
+            </span>
+          </div>
+          @if (hoveredCandle) {
+            <div class="ohlc-summary" aria-live="polite">
+              <span>{{ hoveredCandle.time }}</span>
+              <span>A <b>{{ formatPrice(hoveredCandle.open) }}</b></span>
+              <span>M <b>{{ formatPrice(hoveredCandle.high) }}</b></span>
+              <span>m <b>{{ formatPrice(hoveredCandle.low) }}</b></span>
+              <span>U <b>{{ formatPrice(hoveredCandle.close) }}</b></span>
+              <span>Vol <b>{{ formatPrice(hoveredCandle.volume_total) }}</b></span>
+            </div>
+          } @else {
+            <span class="chart-help">Passe o cursor sobre um candle para ver OHLC e volume</span>
+          }
+        </div>
+
+        <div class="chart-container-wrap">
+          <div
+            #chartContainer
+            class="chart-container"
+            aria-label="Gráfico de candles diários"
+          ></div>
+          @if (isLoadingTickers) {
+            <div class="chart-overlay">Carregando tickers...</div>
+          } @else if (isLoadingCandles && candles.length === 0) {
+            <div class="chart-overlay">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              Carregando candles de {{ selectedTicker }}...
+            </div>
+          } @else if (candlesError && candles.length === 0) {
+            <div class="chart-overlay chart-error" role="alert">{{ candlesError }}</div>
+          } @else if (!isLoadingCandles && selectedTicker && candles.length === 0) {
+            <div class="chart-overlay">Nenhum candle disponível para {{ selectedTicker }}.</div>
+          }
+        </div>
+        <div class="history-status" aria-live="polite">
+          @if (isLoadingCandles && candles.length > 0) {
+            <span class="history-loading">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              Carregando histórico...
+            </span>
+          } @else if (reachedOldestData) {
+            <span>Início do histórico disponível: 2022</span>
+          } @else {
+            <span>Arraste o gráfico para a esquerda para carregar anos anteriores</span>
+          }
+          @if (candlesError && candles.length > 0) {
+            <span class="history-error" role="alert">{{ candlesError }}</span>
+          }
+          <span class="loaded-years">
+            @for (year of loadedYears; track year) {
+              <span>{{ year }}</span>
+            }
+          </span>
+        </div>
       </div>
     </section>
   </main>

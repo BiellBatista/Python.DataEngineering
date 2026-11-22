@@ -68,3 +68,27 @@ sequenceDiagram
         Angular-->>Pessoa: exibe tabela
     end
 ```
+
+## Gráfico de candles
+
+```mermaid
+sequenceDiagram
+    actor Pessoa
+    participant Angular
+    participant API
+    participant Lake
+
+    Pessoa->>Angular: abre a aba Candles
+    Angular->>API: GET /api/candles/tickers
+    API->>Lake: lista diretórios ticker=* com Parquet
+    API-->>Angular: tickers ordenados
+    Angular->>API: GET /api/candles/VALE3?year=2025
+    API->>Lake: lê partição ticker=VALE3 no ano 2025
+    API-->>Angular: candles OHLCV
+    Angular-->>Pessoa: renderiza série no Lightweight Charts
+    Pessoa->>Angular: arrasta para a esquerda
+    Angular->>API: GET /api/candles/VALE3?year=2024
+    API-->>Angular: candles do ano anterior
+    Angular->>Angular: deduplica por data, ordena e preserva a viewport
+    Angular-->>Pessoa: histórico estendido
+```

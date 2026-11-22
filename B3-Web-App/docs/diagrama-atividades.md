@@ -20,6 +20,29 @@ flowchart TD
 O launcher não inicia o B3-Pipelines. Ele exige que a rede externa e o
 DuckDBServer já estejam ativos.
 
+## Carregamento progressivo do gráfico
+
+```mermaid
+flowchart TD
+    Init["Abrir gráfico na aba Candles"]
+    List["GET /api/candles/tickers"]
+    Default{"VALE3 disponível?"}
+    Pick["Selecionar VALE3 ou primeiro ticker"]
+    Timeframe{"Timeframe 1D ativo;<br/>5min e 1M desabilitados"}
+    Load2025["Buscar somente o ano 2025"]
+    Pan{"Navegação alcançou o início carregado?"}
+    LoadOlder["Buscar o ano histórico anterior"]
+    Merge["Deduplicar por data, ordenar e atualizar séries"]
+    Preserve["Deslocar faixa lógica para preservar a viewport"]
+    Oldest{"Já carregou 2022?"}
+    Done["Sinalizar limite histórico"]
+
+    Init --> List --> Default --> Pick --> Timeframe --> Load2025 --> Pan
+    Pan -->|"sim"| LoadOlder --> Merge --> Preserve --> Oldest
+    Oldest -->|"não"| Pan
+    Oldest -->|"sim"| Done
+```
+
 ## Carregamento do catálogo
 
 ```mermaid

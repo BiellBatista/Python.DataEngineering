@@ -39,11 +39,13 @@ flowchart LR
         HTTP["HttpClient"]
         Forms["FormsModule"]
         Core["Component / inject / ErrorHandler"]
+        LWC["lightweight-charts<br/>séries de candles e volume"]
     end
 
     Root --> HTTP
     Root --> Forms
     Root --> Telemetry
+    Root --> LWC
     ErrorHandler --> Telemetry
     Telemetry --> HTTP
     Root --> Core

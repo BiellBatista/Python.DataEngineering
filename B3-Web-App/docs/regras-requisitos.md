@@ -31,6 +31,29 @@
    como texto, datas são ISO 8601 e bytes são codificados em Base64.
 7. O SQL recebido não é registrado em spans, logs ou métricas.
 
+## Regras do gráfico Gold
+
+1. Os tickers são listados a partir de diretórios `ticker=<TICKER>` da pasta
+   configurada em `B3_GOLD_CANDLES_DIR`; partições inválidas ou sem Parquet são
+   omitidas.
+2. O endpoint de candles valida tickers com `^[A-Z0-9]{1,12}$` antes de
+   montar o caminho e consulta apenas os Parquets da partição daquele ticker.
+3. A API recebe um ano ou uma janela de datas, ou `before_date` com limite.
+   Janelas vazias retornam lista vazia e datas/valores numéricos são
+   serializados como `YYYY-MM-DD` e `float`.
+4. O gráfico inicia em 2025 (preferindo `VALE3`) e carrega anos anteriores
+   sequencialmente até 2022 quando a pessoa navega para a esquerda. Requisições
+   concorrentes do mesmo histórico são ignoradas; candles são deduplicados por
+   data, ordenados ascendentemente e a faixa lógica visível é deslocada para
+   preservar a posição após inserir dados antigos.
+5. Os valores são nominais do COTAHIST, não ajustados por proventos; `close`
+   representa PREULT (último negócio), não o fechamento oficial.
+6. A interface oferece o seletor de timeframe `5min`, `1D` e `1M`; somente `1D`
+   está habilitado até que existam dados intradiários e mensais no Data Lake.
+7. O catálogo lateral de datasets é exibido apenas na aba Data Explorer; a aba
+   Candles mostra o gráfico em largura total com busca de ticker à esquerda e
+   timeframe à direita.
+
 ## Requisitos funcionais
 
 | ID | Requisito |
@@ -44,6 +67,10 @@
 | RF-07 | O frontend deve mostrar estados de carregamento, sucesso e erro. |
 | RF-08 | Eventos agregados do frontend devem ser enviados sem SQL ou valores de consulta. |
 | RF-09 | A API deve expor `/api/health` confirmando o catálogo e o DuckDBServer. |
+| RF-10 | A API deve listar tickers Gold e consultar candles por janela com dados somente da partição ticker solicitada. |
+| RF-11 | A interface deve exibir candles, selecionar/pesquisar tickers, carregar 2025 inicialmente e oferecer timeframe `5min`/`1D`/`1M` com apenas `1D` ativo. |
+| RF-12 | O gráfico deve carregar anos anteriores sob demanda preservando a posição visual e evitando duplicatas. |
+| RF-13 | A interface deve alternar entre as abas Candles e Data Explorer, exibindo o catálogo lateral somente no Data Explorer. |
 
 ## Requisitos não funcionais e limites
 

@@ -1,4 +1,4 @@
-"""Logging estruturado, traces e métricas do B3 Data Explorer."""
+"""Logging estruturado, traces e métricas do B3 Data Process."""
 
 import json
 import logging
@@ -295,7 +295,7 @@ async def observe_http_requests(
 
 @asynccontextmanager
 async def observability_lifespan(_: FastAPI) -> AsyncIterator[None]:
-    logger.info("API do Data Explorer iniciada.")
+    logger.info("API do Data Process iniciada.")
     try:
         yield
     finally:
@@ -307,4 +307,4 @@ async def observability_lifespan(_: FastAPI) -> AsyncIterator[None]:
             if not tracer_provider.force_flush(timeout_millis=5000):
                 logger.warning("O envio final dos traces excedeu o tempo limite.")
             tracer_provider.shutdown()
-        logger.info("API do Data Explorer encerrada.")
+        logger.info("API do Data Process encerrada.")

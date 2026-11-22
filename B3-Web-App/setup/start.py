@@ -100,7 +100,7 @@ def main() -> int:
         app_url = f"http://localhost:{web_port}"
         print("Aguardando a API e o DuckDBServer...", flush=True)
         wait_for_application(f"{app_url}/api/health")
-        print(f"Data Explorer disponível em {app_url}", flush=True)
+        print(f"Data Process disponível em {app_url}", flush=True)
         return 0
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Erro ao iniciar o ambiente: {error}", file=sys.stderr)

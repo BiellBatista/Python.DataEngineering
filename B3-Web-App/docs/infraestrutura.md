@@ -32,6 +32,7 @@ usada pelo Compose do B3-Pipelines.
 | Variável | Uso |
 |---|---|
 | `B3_DATA_LAKE_ROOT` | Caminho absoluto no host; reutiliza o caminho do B3-Pipelines. |
+| `B3_GOLD_CANDLES_DIR` | Pasta Gold de candles; padrão `<B3_DATA_LAKE_ROOT>/gold/candles` no container. |
 | `B3_DOCKER_NETWORK` | Rede externa; padrão `b3-pipelines_airflow_network`. |
 | `QUACK_TOKEN` | Token compartilhado com o DuckDBServer. |
 | `DUCKDB_HOST` | Nome DNS interno; padrão `duckdb-server`. |

@@ -50,8 +50,8 @@ Traces no Tempo:
 service.name = "b3-web-app-api"
 ```
 
-Procure `http.server.request`, `duckdb.connect`, `duckdb.catalog.register` e
-`duckdb.query`.
+Procure `http.server.request`, `duckdb.connect`, `duckdb.catalog.register`,
+`duckdb.gold_candles` e `duckdb.query`.
 
 Métricas no Prometheus:
 

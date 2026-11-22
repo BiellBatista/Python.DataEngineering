@@ -11,5 +11,5 @@ bootstrapApplication(AppComponent, {
     { provide: ErrorHandler, useClass: FrontendErrorHandler },
   ],
 }).catch((_error: unknown) => {
-  console.error('Não foi possível iniciar a interface do Data Explorer.');
+  console.error('Não foi possível iniciar a interface do Data Process.');
 });

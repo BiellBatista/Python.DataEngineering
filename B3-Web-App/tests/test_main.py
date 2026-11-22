@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import duckdb
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from backend import main
@@ -119,6 +120,152 @@ class DiscoverTablesTests(unittest.TestCase):
             tables[0]["qualified_name"],
             '"bronze"."daily-quotes ""raw"""',
         )
+
+
+class GoldCandlesApiTests(unittest.TestCase):
+    def test_lists_only_valid_ticker_partitions_containing_parquet(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for ticker in ("VALE3", "PETR4"):
+                partition = root / f"ticker={ticker}"
+                partition.mkdir()
+                _write_gold_parquet(partition / "part.parquet")
+            (root / "ticker=INVALID-1").mkdir()
+            (root / "ticker=EMPTY3").mkdir()
+
+            with patch.object(main, "GOLD_CANDLES_DIR", root):
+                result = main.gold_candle_tickers()
+
+        self.assertEqual(result.tickers, ["PETR4", "VALE3"])
+
+    def test_reads_year_window_and_converts_decimal_values_to_floats(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            partition = root / "ticker=VALE3"
+            partition.mkdir()
+            _write_gold_parquet(partition / "part.parquet")
+            with (
+                patch.object(main, "GOLD_CANDLES_DIR", root),
+                patch.object(main, "_connect_duckdb", side_effect=_connect_local),
+            ):
+                response = main.gold_candles(
+                    "VALE3",
+                    year=2025,
+                    start_date=None,
+                    end_date=None,
+                    before_date=None,
+                    limit=5000,
+                )
+
+        self.assertEqual(
+            [candle.time for candle in response.candles],
+            [date(2025, 1, 2), date(2025, 1, 3)],
+        )
+        self.assertIsInstance(response.candles[0].close, float)
+        self.assertEqual(response.candles[0].close, 11.25)
+
+    def test_before_date_returns_latest_prior_window_in_ascending_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            partition = root / "ticker=VALE3"
+            partition.mkdir()
+            _write_gold_parquet(partition / "part.parquet")
+            with (
+                patch.object(main, "GOLD_CANDLES_DIR", root),
+                patch.object(main, "_connect_duckdb", side_effect=_connect_local),
+            ):
+                response = main.gold_candles(
+                    "VALE3",
+                    start_date=None,
+                    end_date=None,
+                    before_date=date(2025, 1, 4),
+                    year=None,
+                    limit=2,
+                )
+
+        self.assertEqual(
+            [candle.time for candle in response.candles],
+            [date(2025, 1, 2), date(2025, 1, 3)],
+        )
+
+    def test_empty_partition_and_invalid_ticker_or_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "ticker=VALE3").mkdir()
+            with patch.object(main, "GOLD_CANDLES_DIR", root):
+                self.assertEqual(
+                    main.gold_candles(
+                        "VALE3",
+                        start_date=None,
+                        end_date=None,
+                        before_date=None,
+                        year=None,
+                        limit=100,
+                    ).candles,
+                    [],
+                )
+                with self.assertRaises(HTTPException) as unsafe_ticker:
+                    main.gold_candles(
+                        "../etc",
+                        start_date=None,
+                        end_date=None,
+                        before_date=None,
+                        year=None,
+                        limit=100,
+                    )
+                self.assertEqual(unsafe_ticker.exception.status_code, 422)
+
+                with self.assertRaises(HTTPException) as invalid_range:
+                    main.gold_candles(
+                        "VALE3",
+                        start_date=date(2025, 2, 1),
+                        end_date=date(2025, 1, 1),
+                        before_date=None,
+                        year=None,
+                        limit=100,
+                    )
+                self.assertEqual(invalid_range.exception.status_code, 422)
+
+                with self.assertRaises(HTTPException) as conflicting_window:
+                    main.gold_candles(
+                        "VALE3",
+                        start_date=None,
+                        end_date=None,
+                        before_date=date(2025, 1, 4),
+                        year=2025,
+                        limit=100,
+                    )
+                self.assertEqual(conflicting_window.exception.status_code, 422)
+
+
+def _write_gold_parquet(path: Path) -> None:
+    escaped_path = str(path).replace("'", "''")
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            f"""
+            COPY (
+                SELECT DATE '2024-12-31' AS time, '010' AS tipo_mercado,
+                    DECIMAL '10.00' AS open, DECIMAL '12.00' AS high,
+                    DECIMAL '9.00' AS low, DECIMAL '11.00' AS close,
+                    DECIMAL '100.00' AS volume_total
+                UNION ALL
+                SELECT DATE '2025-01-02', '010', DECIMAL '10.25',
+                    DECIMAL '12.50', DECIMAL '9.75', DECIMAL '11.25',
+                    DECIMAL '200.00'
+                UNION ALL
+                SELECT DATE '2025-01-03', '010', DECIMAL '11.25',
+                    DECIMAL '13.50', DECIMAL '10.75', DECIMAL '12.25',
+                    DECIMAL '300.00'
+            ) TO '{escaped_path}' (FORMAT PARQUET)
+            """
+        )
+    finally:
+        connection.close()
+
+
+def _connect_local() -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(":memory:")
 
 
 class ValidateQueryTests(unittest.TestCase):

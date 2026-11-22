@@ -1,9 +1,10 @@
-"""API web do Data Explorer, conectada ao DuckDBServer via Quack."""
+"""API web do Data Process, conectada ao DuckDBServer via Quack."""
 
 import base64
 import logging
 import math
 import os
+import re
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -13,7 +14,7 @@ from time import perf_counter
 from typing import Iterator
 
 import duckdb
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from opentelemetry.trace import Span, Status, StatusCode
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,9 @@ from backend.observability import (
 )
 
 DATA_LAKE_ROOT = Path(os.getenv("B3_DATA_LAKE_ROOT", "/data-lake"))
+GOLD_CANDLES_DIR = Path(
+    os.getenv("B3_GOLD_CANDLES_DIR", str(DATA_LAKE_ROOT / "gold" / "candles"))
+)
 DUCKDB_HOST = os.getenv("DUCKDB_HOST", "duckdb-server")
 DUCKDB_PORT = int(os.getenv("DUCKDB_PORT", "9494"))
 QUACK_TOKEN = os.getenv("QUACK_TOKEN", "")
@@ -36,9 +40,10 @@ LAYERS = ("bronze", "silver", "gold")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _MAX_QUERY_ROWS_LIMIT = 100_000
+_GOLD_TICKER_PATTERN = re.compile(r"^[A-Z0-9]{1,12}$")
 
 app = FastAPI(
-    title="B3 Data Explorer",
+    title="B3 Data Process",
     version="0.1.0",
     lifespan=observability_lifespan,
 )
@@ -47,6 +52,25 @@ app.middleware("http")(observe_http_requests)
 
 class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=100_000)
+
+
+class GoldTickersResponse(BaseModel):
+    tickers: list[str]
+
+
+class GoldCandle(BaseModel):
+    ticker: str
+    time: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume_total: float
+
+
+class GoldCandlesResponse(BaseModel):
+    ticker: str
+    candles: list[GoldCandle]
 
 
 class FrontendLogEvent(str, Enum):
@@ -245,6 +269,151 @@ def _json_value(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
     return str(value)
+
+
+def _gold_ticker_directory(ticker: str) -> Path:
+    if not _GOLD_TICKER_PATTERN.fullmatch(ticker):
+        raise HTTPException(
+            status_code=422,
+            detail="ticker deve conter de 1 a 12 letras maiúsculas ou números.",
+        )
+
+    root = GOLD_CANDLES_DIR.resolve()
+    ticker_path = (GOLD_CANDLES_DIR / f"ticker={ticker}").resolve()
+    if not ticker_path.is_relative_to(root):
+        raise HTTPException(status_code=422, detail="Ticker inválido.")
+    return ticker_path
+
+
+@app.get("/api/candles/tickers", response_model=GoldTickersResponse)
+def gold_candle_tickers() -> GoldTickersResponse:
+    """Lista tickers Gold cujas partições contêm arquivos Parquet."""
+    if not GOLD_CANDLES_DIR.is_dir():
+        return GoldTickersResponse(tickers=[])
+
+    try:
+        tickers = sorted(
+            directory.name.removeprefix("ticker=")
+            for directory in GOLD_CANDLES_DIR.glob("ticker=*")
+            if directory.is_dir()
+            and _GOLD_TICKER_PATTERN.fullmatch(
+                directory.name.removeprefix("ticker=")
+            )
+            and next(directory.rglob("*.parquet"), None) is not None
+        )
+    except OSError as error:
+        logger.exception("Falha ao listar partições Gold de candles.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível listar tickers Gold.",
+        ) from error
+    return GoldTickersResponse(tickers=tickers)
+
+
+@app.get("/api/candles/{ticker}", response_model=GoldCandlesResponse)
+def gold_candles(
+    ticker: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    before_date: date | None = None,
+    year: int | None = Query(default=None, ge=1986, le=2100),
+    limit: int = Query(default=5000, ge=1, le=5000),
+) -> GoldCandlesResponse:
+    """Consulta candles por ticker e janela sem ler outras ticker partitions.
+
+    ``year`` ou ``start_date``/``end_date`` selecionam uma janela crescente.
+    ``before_date`` retorna os ``limit`` pregões imediatamente anteriores,
+    ordenados cronologicamente para consumo pelo gráfico.
+    """
+    ticker_path = _gold_ticker_directory(ticker)
+    if before_date is not None and (
+        start_date is not None or end_date is not None or year is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="before_date não pode ser combinado com year ou datas de janela.",
+        )
+    if year is not None and (start_date is not None or end_date is not None):
+        raise HTTPException(
+            status_code=422,
+            detail="year não pode ser combinado com start_date/end_date.",
+        )
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(
+            status_code=422,
+            detail="start_date deve ser menor ou igual a end_date.",
+        )
+
+    if not ticker_path.is_dir():
+        return GoldCandlesResponse(ticker=ticker, candles=[])
+    try:
+        parquet_files = sorted(
+            str(path) for path in ticker_path.rglob("*.parquet")
+        )
+    except OSError as error:
+        logger.exception("Falha ao localizar Parquet Gold para ticker=%s.", ticker)
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível localizar os arquivos Gold do ticker.",
+        ) from error
+    if not parquet_files:
+        return GoldCandlesResponse(ticker=ticker, candles=[])
+
+    parquet_pattern = _escape_sql_string(
+        str(ticker_path / "**" / "*.parquet")
+    )
+    predicates = [f"time < DATE '{before_date.isoformat()}'"] if before_date else []
+    if year is not None:
+        predicates.append(
+            f"time >= DATE '{year}-01-01' AND time < DATE '{year + 1}-01-01'"
+        )
+    if start_date is not None:
+        predicates.append(f"time >= DATE '{start_date.isoformat()}'")
+    if end_date is not None:
+        predicates.append(f"time <= DATE '{end_date.isoformat()}'")
+    where_clause = f"WHERE {' AND '.join(predicates)}" if predicates else ""
+    sort_direction = "DESC" if before_date else "ASC"
+    sql = f"""
+        SELECT ticker, time, open, high, low, close, volume_total
+        FROM read_parquet('{parquet_pattern}', hive_partitioning = true)
+        {where_clause}
+        ORDER BY time {sort_direction}
+        LIMIT {limit}
+    """
+
+    try:
+        with tracer.start_as_current_span("duckdb.gold_candles") as span:
+            span.set_attribute("db.system.name", "duckdb")
+            span.set_attribute("b3.gold.ticker", ticker)
+            connection = _connect_duckdb()
+            try:
+                rows = connection.execute(sql).fetchall()
+            finally:
+                connection.close()
+    except (duckdb.Error, RuntimeError) as error:
+        logger.exception("Falha ao consultar candles Gold para ticker=%s.", ticker)
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar os candles Gold.",
+        ) from error
+
+    if before_date:
+        rows.reverse()
+    return GoldCandlesResponse(
+        ticker=ticker,
+        candles=[
+            GoldCandle(
+                ticker=row[0],
+                time=row[1],
+                open=float(row[2]),
+                high=float(row[3]),
+                low=float(row[4]),
+                close=float(row[5]),
+                volume_total=float(row[6]),
+            )
+            for row in rows
+        ],
+    )
 
 
 @app.get("/api/health")
