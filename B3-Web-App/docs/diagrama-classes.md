@@ -31,6 +31,7 @@ classDiagram
     }
     class GoldCandle {
         +str ticker
+        +str timeframe
         +date time
         +float open
         +float high
@@ -98,6 +99,7 @@ classDiagram
         +QueryResponse result
         +str activeView
         +str[] availableTickers
+        +str tickerQuery
         +str selectedTicker
         +Candle[] candles
         +TimeframeOption[] timeframes
@@ -109,12 +111,14 @@ classDiagram
         +setActiveView(view)
         +setTimeframe(timeframe)
         +onTickerChange(ticker)
+        +selectTickerOption(ticker)
         +loadAvailableTickers()
         +loadCandlesYear(year)
         +loadNextHistoryYear()
     }
     class Candle {
         +str ticker
+        +str timeframe
         +str time
         +float open
         +float high
@@ -124,6 +128,7 @@ classDiagram
     }
     class TimeframeOption {
         +str id
+        +str value
         +bool available
     }
     class FrontendTelemetryService {

@@ -19,7 +19,8 @@ publicar o servidor DuckDB no host.
 - Exibe candles diários Gold por ticker com Lightweight Charts, carga inicial
   de 2025 e histórico anterior sob demanda até 2022.
 - Lista tickers Gold, permite busca/filtro e seleciona `VALE3` por padrão.
-- Oferece seletor de timeframe (`5min`, `1D`, `1M`), com apenas `1D` ativo.
+- Oferece seletor de timeframe (`5min`, `1D`, `1M`), com `1D` e `1M` ativos e
+  `5min` desabilitado até existirem candles intradiários.
 - Descobre datasets Bronze, Silver e Gold disponíveis no Data Lake.
 - Registra views locais para cada diretório ou arquivo Parquet encontrado.
 - Permite consulta SQL somente leitura pelo editor da interface.
@@ -96,8 +97,9 @@ passa pela API, que consulta somente a partição `ticker=<TICKER>` do Parquet.
 3. Ao arrastar o gráfico para a esquerda, a API é consultada com `year=2024`,
    `2023` e `2022` sequencialmente; candles são deduplicados por data e a
    posição visual é preservada.
-4. O seletor de timeframe oferece `5min`, `1D` e `1M`; somente `1D` está
-   disponível até que os dados intradiários e mensais existam no Data Lake.
+4. O endpoint filtra a coluna `timeframe` da Gold (`1d` diário, `1m` mensal
+   agregado no primeiro dia do mês). O seletor oferece `5min`, `1D` e `1M`;
+   `5min` fica desabilitado até que existam dados intradiários no Data Lake.
 
 ## Fluxo funcional
 
@@ -156,8 +158,9 @@ cd ../B3-Web-App
 
 Abra `http://localhost:4200` (ou a porta configurada em `WEB_PORT`). O launcher
 constrói a imagem, inicia o serviço e aguarda a API confirmar a conexão com o
-DuckDBServer. A aplicação abre no gráfico de candles; a aba **Data Explorer**
-continua disponível no menu principal, com o catálogo lateral exclusivo dela.
+DuckDBServer. A aplicação abre na aba **Candles** (página inicial); a aba
+**Data Explorer** continua disponível no menu principal, com o catálogo
+lateral exclusivo dela.
 
 O gráfico lista os tickers existentes em Gold, seleciona `VALE3` por padrão
 quando disponível e carrega inicialmente 2025. Arraste a série para a esquerda
@@ -168,9 +171,11 @@ aceita `before_date` e `limit` para recuperar uma janela histórica anterior.
 Os preços são nominais, sem ajuste de proventos; `close` reflete PREULT, não o
 fechamento oficial.
 
-Na aba **Candles**, use **Buscar ticker** para filtrar a lista e o seletor
-**Ticker** para trocar o papel; os timeframes `5min` e `1M` aparecem
-desabilitados até os dados existirem. Na aba **Data Explorer**, selecione uma
+Na aba **Candles**, o campo **Ticker** funciona como busca: digite para
+filtrar a lista rolável e clique ou pressione Enter para selecionar; o
+seletor **Timeframe** alterna entre `1D` e
+`1M` (`5min` aparece desabilitado até os dados existirem). Na aba **Data
+Explorer**, selecione uma
 tabela do catálogo lateral para preencher o editor SQL.
 
 Para parar somente a aplicação web, execute `./stop.sh`; a rede

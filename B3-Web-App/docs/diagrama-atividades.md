@@ -28,7 +28,7 @@ flowchart TD
     List["GET /api/candles/tickers"]
     Default{"VALE3 disponível?"}
     Pick["Selecionar VALE3 ou primeiro ticker"]
-    Timeframe{"Timeframe 1D ativo;<br/>5min e 1M desabilitados"}
+    Timeframe{"Timeframe 1D/1M ativos;<br/>5min desabilitado"}
     Load2025["Buscar somente o ano 2025"]
     Pan{"Navegação alcançou o início carregado?"}
     LoadOlder["Buscar o ano histórico anterior"]

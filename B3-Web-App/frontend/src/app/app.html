@@ -201,28 +201,43 @@
         </div>
         <div class="candles-controls">
           <div class="ticker-controls">
-            <label class="ticker-search">
-              <span>Buscar ticker</span>
-              <input
-                type="search"
-                aria-label="Buscar ticker"
-                placeholder="Ex.: VALE"
-                [(ngModel)]="tickerSearch"
-              >
-            </label>
-            <label class="ticker-select">
-              <span>Ticker</span>
-              <select
-                aria-label="Selecionar ticker"
-                [ngModel]="selectedTicker"
-                [disabled]="isLoadingTickers || availableTickers.length === 0"
-                (ngModelChange)="onTickerChange($event)"
-              >
-                @for (ticker of filteredTickers; track ticker) {
-                  <option [value]="ticker">{{ ticker }}</option>
-                }
-              </select>
-            </label>
+            <div class="ticker-combobox">
+              <label class="ticker-field">
+                <span>Ticker</span>
+                <input
+                  type="text"
+                  role="combobox"
+                  aria-expanded="{{ tickerDropdownOpen }}"
+                  aria-label="Buscar e selecionar ticker"
+                  placeholder="Buscar ticker..."
+                  autocomplete="off"
+                  [disabled]="isLoadingTickers || availableTickers.length === 0"
+                  [(ngModel)]="tickerQuery"
+                  (focus)="tickerDropdownOpen = true"
+                  (input)="onTickerInput()"
+                  (blur)="onTickerBlur()"
+                  (keydown.escape)="tickerDropdownOpen = false"
+                  (keydown.enter)="onTickerEnter($event)"
+                >
+              </label>
+              @if (tickerDropdownOpen && !isLoadingTickers) {
+                <ul class="ticker-options" role="listbox">
+                  @for (ticker of filteredTickers; track ticker) {
+                    <li role="option" [attr.aria-selected]="ticker === selectedTicker">
+                      <button
+                        type="button"
+                        class="ticker-option"
+                        [class.ticker-option-active]="ticker === selectedTicker"
+                        (mousedown)="$event.preventDefault()"
+                        (click)="selectTickerOption(ticker)"
+                      >{{ ticker }}</button>
+                    </li>
+                  } @empty {
+                    <li class="ticker-option-empty">Nenhum ticker encontrado</li>
+                  }
+                </ul>
+              }
+            </div>
           </div>
           <div class="timeframe-controls">
             <span class="timeframe-label">Timeframe</span>

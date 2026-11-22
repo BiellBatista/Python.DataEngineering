@@ -54,6 +54,7 @@ interface QueryResponse {
 
 interface Candle {
   ticker: string;
+  timeframe: string;
   time: string;
   open: number;
   high: number;
@@ -75,6 +76,7 @@ type AppView = 'candles' | 'explorer';
 
 interface TimeframeOption {
   id: string;
+  value: string;
   available: boolean;
 }
 
@@ -116,7 +118,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   hasRunQuery = false;
   activeView: AppView = 'candles';
   availableTickers: string[] = [];
-  tickerSearch = '';
+  tickerQuery = '';
+  tickerDropdownOpen = false;
   selectedTicker = '';
   candles: Candle[] = [];
   hoveredCandle: Candle | null = null;
@@ -126,9 +129,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   candlesError = '';
   reachedOldestData = false;
   readonly timeframes: TimeframeOption[] = [
-    { id: '5min', available: false },
-    { id: '1D', available: true },
-    { id: '1M', available: false },
+    { id: '5min', value: '5min', available: false },
+    { id: '1D', value: '1d', available: true },
+    { id: '1M', value: '1m', available: true },
   ];
   selectedTimeframe = '1D';
 
@@ -148,10 +151,38 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   get filteredTickers(): string[] {
-    const filter = this.tickerSearch.trim().toUpperCase();
+    const filter = this.tickerQuery.trim().toUpperCase();
     return filter
       ? this.availableTickers.filter((ticker) => ticker.includes(filter))
       : this.availableTickers;
+  }
+
+  onTickerInput(): void {
+    this.tickerDropdownOpen = true;
+  }
+
+  onTickerBlur(): void {
+    this.tickerDropdownOpen = false;
+    const query = this.tickerQuery.trim().toUpperCase();
+    if (query !== this.selectedTicker) {
+      this.tickerQuery = this.selectedTicker;
+    }
+  }
+
+  onTickerEnter(event: Event): void {
+    event.preventDefault();
+    const exact = this.availableTickers.find(
+      (ticker) => ticker === this.tickerQuery.trim().toUpperCase(),
+    );
+    if (exact) {
+      this.selectTickerOption(exact);
+    }
+  }
+
+  selectTickerOption(ticker: string): void {
+    this.tickerQuery = ticker;
+    this.tickerDropdownOpen = false;
+    this.onTickerChange(ticker);
   }
 
   loadCatalog(): void {
@@ -176,7 +207,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
           preferredLayer?.tables[0] ??
           response.layers.find((layer) => layer.tables.length > 0)?.tables[0];
         if (firstTable && !this.sql.trim()) {
-          this.selectTable(firstTable);
+          this.sql = `SELECT *\nFROM ${firstTable.qualified_name}\nLIMIT 100;`;
         }
       },
       error: (error: HttpErrorResponse) => {
@@ -207,6 +238,8 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     this.selectedTimeframe = timeframe.id;
+    this.resetCandlesView();
+    void this.loadCandlesYear(INITIAL_YEAR, true);
   }
 
   onTickerChange(ticker: string): void {
@@ -214,6 +247,13 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
     this.selectedTicker = ticker;
+    this.tickerQuery = ticker;
+    this.tickerDropdownOpen = false;
+    this.resetCandlesView();
+    void this.loadCandlesYear(INITIAL_YEAR, true);
+  }
+
+  private resetCandlesView(): void {
     this.requestGeneration += 1;
     this.candlesByTime.clear();
     this.candles = [];
@@ -228,7 +268,6 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.candleSeries?.setData([]);
     this.volumeSeries?.setData([]);
     this.chart?.timeScale().fitContent();
-    void this.loadCandlesYear(INITIAL_YEAR, true);
   }
 
   runQuery(): void {
@@ -394,10 +433,13 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     this.candlesError = '';
     const generation = this.requestGeneration;
     try {
+      const timeframe =
+        this.timeframes.find((option) => option.id === this.selectedTimeframe)
+          ?.value ?? '1d';
       const response = await firstValueFrom(
         this.http.get<GoldCandlesResponse>(
           `/api/candles/${encodeURIComponent(this.selectedTicker)}`,
-          { params: { year } },
+          { params: { year, timeframe } },
         ),
       );
       if (generation !== this.requestGeneration) {

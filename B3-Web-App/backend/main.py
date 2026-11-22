@@ -41,6 +41,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _MAX_QUERY_ROWS_LIMIT = 100_000
 _GOLD_TICKER_PATTERN = re.compile(r"^[A-Z0-9]{1,12}$")
+_GOLD_TIMEFRAMES = {"1d", "1m", "5min"}
 
 app = FastAPI(
     title="B3 Data Process",
@@ -60,6 +61,7 @@ class GoldTickersResponse(BaseModel):
 
 class GoldCandle(BaseModel):
     ticker: str
+    timeframe: str
     time: date
     open: float
     high: float
@@ -317,14 +319,22 @@ def gold_candles(
     end_date: date | None = None,
     before_date: date | None = None,
     year: int | None = Query(default=None, ge=1986, le=2100),
+    timeframe: str = "1d",
     limit: int = Query(default=5000, ge=1, le=5000),
 ) -> GoldCandlesResponse:
     """Consulta candles por ticker e janela sem ler outras ticker partitions.
 
     ``year`` ou ``start_date``/``end_date`` selecionam uma janela crescente.
     ``before_date`` retorna os ``limit`` pregões imediatamente anteriores,
-    ordenados cronologicamente para consumo pelo gráfico.
+    ordenados cronologicamente para consumo pelo gráfico. ``timeframe``
+    filtra ``1d`` (padrão), ``1m`` ou ``5min``.
     """
+    timeframe = timeframe.lower()
+    if timeframe not in _GOLD_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail="timeframe deve ser um de: 1d, 1m, 5min.",
+        )
     ticker_path = _gold_ticker_directory(ticker)
     if before_date is not None and (
         start_date is not None or end_date is not None or year is not None
@@ -362,7 +372,10 @@ def gold_candles(
     parquet_pattern = _escape_sql_string(
         str(ticker_path / "**" / "*.parquet")
     )
-    predicates = [f"time < DATE '{before_date.isoformat()}'"] if before_date else []
+    predicates = [
+        f"timeframe = '{timeframe}'",
+        *([f"time < DATE '{before_date.isoformat()}'"] if before_date else []),
+    ]
     if year is not None:
         predicates.append(
             f"time >= DATE '{year}-01-01' AND time < DATE '{year + 1}-01-01'"
@@ -374,7 +387,7 @@ def gold_candles(
     where_clause = f"WHERE {' AND '.join(predicates)}" if predicates else ""
     sort_direction = "DESC" if before_date else "ASC"
     sql = f"""
-        SELECT ticker, time, open, high, low, close, volume_total
+        SELECT ticker, timeframe, time, open, high, low, close, volume_total
         FROM read_parquet('{parquet_pattern}', hive_partitioning = true)
         {where_clause}
         ORDER BY time {sort_direction}
@@ -404,12 +417,13 @@ def gold_candles(
         candles=[
             GoldCandle(
                 ticker=row[0],
-                time=row[1],
-                open=float(row[2]),
-                high=float(row[3]),
-                low=float(row[4]),
-                close=float(row[5]),
-                volume_total=float(row[6]),
+                timeframe=row[1],
+                time=row[2],
+                open=float(row[3]),
+                high=float(row[4]),
+                low=float(row[5]),
+                close=float(row[6]),
+                volume_total=float(row[7]),
             )
             for row in rows
         ],

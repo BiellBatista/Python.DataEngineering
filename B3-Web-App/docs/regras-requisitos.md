@@ -48,11 +48,15 @@
    preservar a posição após inserir dados antigos.
 5. Os valores são nominais do COTAHIST, não ajustados por proventos; `close`
    representa PREULT (último negócio), não o fechamento oficial.
-6. A interface oferece o seletor de timeframe `5min`, `1D` e `1M`; somente `1D`
-   está habilitado até que existam dados intradiários e mensais no Data Lake.
-7. O catálogo lateral de datasets é exibido apenas na aba Data Explorer; a aba
-   Candles mostra o gráfico em largura total com busca de ticker à esquerda e
-   timeframe à direita.
+6. A interface oferece o seletor de timeframe `5min`, `1D` e `1M`; `1D`
+   (`timeframe='1d'`) e `1M` (`timeframe='1m'`, primeiro dia do mês) estão
+   habilitados. `5min` permanece desabilitado até que existam candles
+   intradiários no Data Lake. O campo Ticker é um combobox: a digitação
+   filtra a lista rolável de tickers e a seleção recarrega o gráfico.
+7. A página inicial da aplicação é a aba Candles; a aba Data Explorer é
+   acessada pelo menu principal. O catálogo lateral de datasets é exibido
+   apenas na aba Data Explorer; a aba Candles mostra o gráfico em largura total
+   com busca de ticker à esquerda e timeframe à direita.
 
 ## Requisitos funcionais
 
@@ -68,9 +72,9 @@
 | RF-08 | Eventos agregados do frontend devem ser enviados sem SQL ou valores de consulta. |
 | RF-09 | A API deve expor `/api/health` confirmando o catálogo e o DuckDBServer. |
 | RF-10 | A API deve listar tickers Gold e consultar candles por janela com dados somente da partição ticker solicitada. |
-| RF-11 | A interface deve exibir candles, selecionar/pesquisar tickers, carregar 2025 inicialmente e oferecer timeframe `5min`/`1D`/`1M` com apenas `1D` ativo. |
+| RF-11 | A interface deve exibir candles, selecionar/pesquisar tickers, carregar 2025 inicialmente e oferecer timeframe `5min`/`1D`/`1M` com `1D` e `1M` ativos. |
 | RF-12 | O gráfico deve carregar anos anteriores sob demanda preservando a posição visual e evitando duplicatas. |
-| RF-13 | A interface deve alternar entre as abas Candles e Data Explorer, exibindo o catálogo lateral somente no Data Explorer. |
+| RF-13 | A interface deve abrir na aba Candles e alternar entre as abas Candles e Data Explorer, exibindo o catálogo lateral somente no Data Explorer. |
 
 ## Requisitos não funcionais e limites
 

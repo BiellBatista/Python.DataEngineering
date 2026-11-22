@@ -6,10 +6,10 @@ o B3-Pipelines e a observabilidade.
 
 ## Objetivo
 
-Oferecer a visualização de candles diários Gold e permitir a exploração
-somente leitura dos dados Bronze, Silver e Gold já persistidos no Data Lake,
-sem duplicar o pipeline de transformação nem publicar o servidor DuckDB no
-host.
+Oferecer a visualização de candles diários Gold como página inicial e
+permitir a exploração somente leitura dos dados Bronze, Silver e Gold já
+persistidos no Data Lake, sem duplicar o pipeline de transformação nem publicar
+o servidor DuckDB no host.
 
 ## Sumário
 

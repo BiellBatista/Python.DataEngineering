@@ -188,6 +188,42 @@ class GoldCandlesApiTests(unittest.TestCase):
             [date(2025, 1, 2), date(2025, 1, 3)],
         )
 
+    def test_filters_candles_by_timeframe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            partition = root / "ticker=VALE3"
+            partition.mkdir()
+            _write_gold_parquet(partition / "part.parquet")
+            with (
+                patch.object(main, "GOLD_CANDLES_DIR", root),
+                patch.object(main, "_connect_duckdb", side_effect=_connect_local),
+            ):
+                monthly = main.gold_candles(
+                    "VALE3",
+                    start_date=None,
+                    end_date=None,
+                    before_date=None,
+                    year=None,
+                    timeframe="1M",
+                    limit=100,
+                )
+                with self.assertRaises(HTTPException) as invalid_timeframe:
+                    main.gold_candles(
+                        "VALE3",
+                        start_date=None,
+                        end_date=None,
+                        before_date=None,
+                        year=None,
+                        timeframe="1h",
+                        limit=100,
+                    )
+
+        self.assertEqual(
+            [(candle.time, candle.timeframe) for candle in monthly.candles],
+            [(date(2025, 1, 1), "1m")],
+        )
+        self.assertEqual(invalid_timeframe.exception.status_code, 422)
+
     def test_empty_partition_and_invalid_ticker_or_window(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -245,18 +281,23 @@ def _write_gold_parquet(path: Path) -> None:
         connection.execute(
             f"""
             COPY (
-                SELECT DATE '2024-12-31' AS time, '010' AS tipo_mercado,
+                SELECT DATE '2024-12-31' AS time, '1d' AS timeframe,
+                    '010' AS tipo_mercado,
                     DECIMAL '10.00' AS open, DECIMAL '12.00' AS high,
                     DECIMAL '9.00' AS low, DECIMAL '11.00' AS close,
                     DECIMAL '100.00' AS volume_total
                 UNION ALL
-                SELECT DATE '2025-01-02', '010', DECIMAL '10.25',
+                SELECT DATE '2025-01-02', '1d', '010', DECIMAL '10.25',
                     DECIMAL '12.50', DECIMAL '9.75', DECIMAL '11.25',
                     DECIMAL '200.00'
                 UNION ALL
-                SELECT DATE '2025-01-03', '010', DECIMAL '11.25',
+                SELECT DATE '2025-01-03', '1d', '010', DECIMAL '11.25',
                     DECIMAL '13.50', DECIMAL '10.75', DECIMAL '12.25',
                     DECIMAL '300.00'
+                UNION ALL
+                SELECT DATE '2025-01-01', '1m', '010', DECIMAL '10.25',
+                    DECIMAL '13.50', DECIMAL '9.75', DECIMAL '12.25',
+                    DECIMAL '500.00'
             ) TO '{escaped_path}' (FORMAT PARQUET)
             """
         )

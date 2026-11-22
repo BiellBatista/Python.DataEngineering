@@ -82,12 +82,12 @@ sequenceDiagram
     Angular->>API: GET /api/candles/tickers
     API->>Lake: lista diretórios ticker=* com Parquet
     API-->>Angular: tickers ordenados
-    Angular->>API: GET /api/candles/VALE3?year=2025
-    API->>Lake: lê partição ticker=VALE3 no ano 2025
+    Angular->>API: GET /api/candles/VALE3?year=2025&timeframe=1d
+    API->>Lake: lê partição ticker=VALE3 filtrando timeframe=1d no ano 2025
     API-->>Angular: candles OHLCV
     Angular-->>Pessoa: renderiza série no Lightweight Charts
     Pessoa->>Angular: arrasta para a esquerda
-    Angular->>API: GET /api/candles/VALE3?year=2024
+    Angular->>API: GET /api/candles/VALE3?year=2024&timeframe=1d
     API-->>Angular: candles do ano anterior
     Angular->>Angular: deduplica por data, ordena e preserva a viewport
     Angular-->>Pessoa: histórico estendido
