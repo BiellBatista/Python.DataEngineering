@@ -110,6 +110,15 @@ from utils.helpers import parse_ticker_list
                 "(ex.: 'VALE, PETR, BBAS'). Deixe vazio para processar todos."
             ),
         ),
+        "run_gold": Param(
+            True,
+            type="boolean",
+            title="Executar Gold",
+            description=(
+                "Quando falso, a task de candles Gold é ignorada e apenas "
+                "Bronze e Silver são processadas."
+            ),
+        ),
     },
     tags=["b3", "market_data", "duckdb", "medallion", "cotahist"],
     doc_md=__doc__,
@@ -214,6 +223,9 @@ def b3_cotahist_pipeline():
     def run_gold_candles_step(run_id: str, **context: Any) -> None:
         """Gera as partições Gold após todas as partições Silver do lote."""
         params = context["params"]
+        if not params["run_gold"]:
+            print("Parâmetro run_gold=false: task Gold ignorada.")
+            return
         print("Iniciando geração dos candles Gold.")
         execute_gold_candles_load(
             start_with=parse_ticker_list(params["start_with"]),
@@ -241,5 +253,6 @@ if __name__ == "__main__":
             "end_year": DEFAULT_END_YEAR,
             "memory_limit": DUCKDB_MEMORY_LIMIT,
             "threads": DUCKDB_THREADS,
+            "run_gold": True,
         }
     )

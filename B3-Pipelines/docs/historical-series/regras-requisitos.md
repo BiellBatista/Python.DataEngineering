@@ -142,6 +142,7 @@ no código atual.
 | `silver_max_workers` | Inteiro positivo; padrão `SILVER_MAX_WORKERS` | Máximo de partições anuais Silver em paralelo. |
 | `gold_max_workers` | Inteiro positivo; padrão `GOLD_MAX_WORKERS` | Máximo de grupos de tickers Gold em paralelo. |
 | `start_with` | Texto separado por vírgula; padrão vazio | Prefixos de ticker para a Gold; vazio processa todos. |
+| `run_gold` | Booleano; padrão `true` | Quando `false`, a task Gold é ignorada e só Bronze e Silver rodam. |
 
 Referências de implementação: [definição da DAG](../../airflow/dags/dag_historical_series.py),
 [DAG exclusiva da camada Gold](../../airflow/dags/dag_gold_candles.py),

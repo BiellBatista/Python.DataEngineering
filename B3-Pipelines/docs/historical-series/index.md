@@ -99,7 +99,8 @@ Airflow valida o intervalo solicitado e expande uma task group por ano. Para
 cada ano, a validação RAW é uma barreira antes da gravação Bronze; a Data
 Quality Bronze é outra barreira antes da Silver. Depois que todos os anos da
 Silver terminam, a task Gold lê o dataset Silver completo e escreve as
-partições por ticker solicitadas. DuckDB/Quack acessa o mesmo volume
+partições por ticker solicitadas — ela pode ser ignorada com o parâmetro
+`run_gold=false`. DuckDB/Quack acessa o mesmo volume
 compartilhado para ler e escrever arquivos. Falhas e tentativas são
 descritas em [regras e requisitos](regras-requisitos.md).
 

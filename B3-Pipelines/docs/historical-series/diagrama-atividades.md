@@ -87,4 +87,6 @@ flowchart TD
 ```
 
 Uma única task Gold é executada após todos os grupos anuais. Ela lê a Silver
-consolidada e substitui apenas os diretórios dos tickers gerados.
+consolidada e substitui apenas os diretórios dos tickers gerados. Com o
+parâmetro `run_gold=false`, a task é ignorada e a execução termina após a
+Silver, sem alterar a Gold.
